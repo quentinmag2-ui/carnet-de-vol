@@ -1,10 +1,11 @@
 // Carnet de vol HOP! — application web. Tout est calculé et enregistré sur le téléphone : rien n'est envoyé.
+import "./polyfills.js";   // en premier : compléments pour les anciennes versions de Safari
 import { AIRPORTS, COUNTRY, parisParts, parisToMs, addDays, computeFlight } from "./core.js";
 import { parseIcs, parseShortcut, calendarRecords } from "./calendar.js";
 import { readRelevePdf } from "./releve.js";
 import { loadDb, saveDb, loadSettings, saveSettings, emptyDb, mergeCalendar, planReleve, applyReleve, backupObject, restoreBackup, lsGet, lsSet, K_DATA } from "./store.js";
 
-export const VERSION = "1.0.0";
+export const VERSION = "1.0.1";
 const $ = s => document.querySelector(s);
 const esc = s => String(s ?? "").replace(/[&<>"]/g, c => ({"&":"&amp;","<":"&lt;",">":"&gt;",'"':"&quot;"}[c]));
 const MO = ["janv.","févr.","mars","avr.","mai","juin","juil.","août","sept.","oct.","nov.","déc."];
