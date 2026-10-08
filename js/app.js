@@ -1,11 +1,11 @@
 // Carnet de vol HOP! — application web. Tout est calculé et enregistré sur le téléphone : rien n'est envoyé.
 import "./polyfills.js";   // en premier : compléments pour les anciennes versions de Safari
-import { AIRPORTS, COUNTRY, parisParts, parisToMs, addDays, computeFlight } from "./core.js";
+import { AIRPORTS, COUNTRY, parisParts, parisToMs, addDays, computeFlight, normType } from "./core.js";
 import { parseIcs, parseShortcut, calendarRecords } from "./calendar.js";
-import { readRelevePdf } from "./releve.js";
-import { loadDb, saveDb, loadSettings, saveSettings, emptyDb, mergeCalendar, planReleve, applyReleve, backupObject, restoreBackup, lsGet, lsSet, K_DATA } from "./store.js";
+import { readPdfAny } from "./releve.js";
+import { loadDb, saveDb, loadSettings, saveSettings, emptyDb, mergeCalendar, planReleve, applyReleve, backupObject, restoreBackup, lsGet, lsSet, K_DATA, lastArrivalBefore, applyHotelReleve } from "./store.js";
 
-export const VERSION = "1.1.0";
+export const VERSION = "1.2.3";
 const $ = s => document.querySelector(s);
 const esc = s => String(s ?? "").replace(/[&<>"]/g, c => ({"&":"&amp;","<":"&lt;",">":"&gt;",'"':"&quot;"}[c]));
 const MO = ["janv.","févr.","mars","avr.","mai","juin","juil.","août","sept.","oct.","nov.","déc."];
@@ -30,7 +30,18 @@ function normSims(arr){ const by = {}, out = [];
 // Comptées : séances récurrentes (évaluations, trainings…) à partir de la date réglée (fin de la qualification de type).
 // La QT et les simulateurs non certifiés (ex. Solidair) sont listés sans être comptés.
 const simCounted = s => s.k === "Récurrent" && (!SET.simCountFrom || s.d >= SET.simCountFrom);
-const D = {gen: `${nowParts.d} ${nowParts.h}`, flights: DB.flights, sims: normSims(DB.sims), hotels: DB.hotels, trans: DB.trans,
+// Types avion : seulement E70 et E90 (les E75 / E95 venus du planning sont regroupés)
+{ let ch = 0; DB.flights.forEach(f => { const t = normType(f.ty); if (t !== (f.ty || "")) { f.ty = t; ch++; } }); if (!["", "E70", "E90"].includes(SET.defaultType)) SET.defaultType = normType(SET.defaultType); if (ch) saveDb(DB); }
+// Hôtels des relevés importés avant la v1.2 sans escale : on la retrouve d'après les vols
+if (DB.hotels.some(h => !h.ap)) { let fixed = 0; DB.hotels.forEach(h => { if (!h.ap) { const a = lastArrivalBefore(DB, h.d); if (a) { h.ap = a; fixed++; } } }); if (fixed) saveDb(DB); }
+// Nuits d'hôtel comptées : escale connue, jamais à l'aéroport du domicile ; à la base, seulement si une nuit d'hôtel
+// y est confirmée par le relevé d'hôtels ou par le planning (le relevé d'activité seul ne dit pas où était l'hôtel).
+const baseOn = d => { let b = SET.bases[0][1]; SET.bases.forEach(([from, v]) => { if (d >= from) b = v; }); return b; };
+const atBase = h => h.ap === baseOn(h.d);
+const hotelConfirmed = h => /Calendrier|Relevé hôtels/.test(h.src || "") || (!h.src && !!h.h);
+const countedHotel = h => !!h.ap && !(SET.home && h.ap === SET.home) && (!atBase(h) || hotelConfirmed(h));
+const isDecoucher = h => countedHotel(h) && !atBase(h) && h.n > 0;
+const D = {gen: `${nowParts.d} ${nowParts.h}`, flights: DB.flights, sims: normSims(DB.sims), hotels: DB.hotels.filter(countedHotel), hotelsAll: DB.hotels, trans: DB.trans,
   days: Object.assign({}, DB.dayCal, DB.days), ap: apMap()};
 const HAS_DATA = D.flights.length > 0;
 const HUB = (() => { let b = SET.bases[0][1]; SET.bases.forEach(([from, v]) => { if (nowParts.d >= from) b = v; }); return AIRPORTS[b] ? b : "CDG"; })();   // base du moment : centre de la carte
@@ -62,7 +73,7 @@ function setupHtml(){
   const apText = Object.entries(SET.airports || {}).map(([k, v]) => `${k};${v[0]};${v[1]};${v[2]};${v[3]}`).join("\n");
   return `<div class="setup-grid">
   <div class="panel"><h3>1. Relevés d'activité (PDF)</h3>
-    <p class="muted small">Le relevé mensuel de MyPeopleDoc : heures bloc réelles, immatriculations, hôtels, jours OFF, congés, réserves. Enregistre les PDF dans l'app Fichiers, puis choisis-les ici (plusieurs à la fois si tu veux). La lecture se fait sur le téléphone.</p>
+    <p class="muted small">Les relevés d'activité mensuels de MyPeopleDoc (heures bloc réelles, immatriculations, hôtels, jours OFF, congés, réserves) et le relevé d'hôtels annuel (escale, nom et coût de chaque nuitée). Enregistre les PDF dans l'app Fichiers, puis choisis-les ici, plusieurs à la fois si tu veux : le type de relevé est reconnu tout seul. La lecture se fait sur le téléphone.</p>
     <div class="actions"><label class="chip on filebtn">Choisir des relevés PDF<input type="file" id="relFile" accept="application/pdf,.pdf" multiple hidden></label></div>
     <div id="relMsg" class="impmsg" role="status"></div>
     <div id="relPlans">${pending.plans.map(releveCard).join("")}</div>
@@ -92,7 +103,7 @@ function setupHtml(){
     ${rows}
     <div class="actions"><button class="chip" type="button" id="bAdd">+ Changement de base</button></div>
     <div class="setrow"><label for="setHome">Aéroport proche du domicile</label><input id="setHome" class="fin ap" maxlength="3" value="${esc(SET.home)}" placeholder="LYS"></div>
-    <div class="setrow"><label for="setType">Type avion par défaut (Crew Access)</label><select id="setType" class="fin">${["", "E70", "E75", "E90", "E95"].map(t => `<option value="${t}"${SET.defaultType === t ? " selected" : ""}>${t || "—"}</option>`).join("")}</select></div>
+    <div class="setrow"><label for="setType">Type avion par défaut (Crew Access)</label><select id="setType" class="fin">${["", "E70", "E90"].map(t => `<option value="${t}"${SET.defaultType === t ? " selected" : ""}>${t || "—"}</option>`).join("")}</select></div>
     <div class="setrow"><label for="setSim">Simu comptés à partir du</label><input type="date" id="setSim" value="${esc(SET.simCountFrom)}"></div>
     <div class="setrow"><label for="setSer">Séries de travail à partir du</label><input type="date" id="setSer" value="${esc(SET.seriesStart)}"></div>
     <p class="muted small">La base découpe les rotations et sert au calcul des frais en courrier ; une nuit à la base ou à l'aéroport du domicile n'est pas un découcher. « Simu comptés à partir du » : la fin de ta qualification de type.</p>
@@ -137,17 +148,31 @@ async function getPdfjs(){
 }
 async function readReleves(files){
   const msg = msgTo("#relMsg"); msg(`Lecture de ${files.length} fichier(s)…`, true);
-  const errs = [];
+  const errs = [], hotelDone = [];
   try { await getPdfjs(); } catch (e) { msg("Le lecteur PDF n'a pas pu se charger : " + e.message, false); return; }
   for (const f of files) {
     try {
-      const {rec} = await readRelevePdf(pdfjs, await f.arrayBuffer());
+      const res = await readPdfAny(pdfjs, await f.arrayBuffer());
+      if (res.kind === "hotels") { hotelDone.push(Object.assign(applyHotelReleve(DB, res), {ok: res.ok})); continue; }
+      const rec = res.rec;
       if (!rec.flights.length && !Object.keys(rec.days).length) throw new Error("aucune ligne d'activité lue");
       pending.plans = pending.plans.filter(p => p.rec.ym !== rec.ym);
       pending.plans.push(planReleve(DB, rec));
     } catch (e) { errs.push(`${f.name} : ${e.message}`); }
   }
   pending.plans.sort((a, b) => a.rec.ym.localeCompare(b.rec.ym));
+  if (hotelDone.length) {
+    // relevé d'hôtels : appliqué tout de suite (il ne retire rien), et coût des nuitées repris dans l'onglet Impôts s'il est vide
+    const byYear = {}; hotelDone.forEach(r => Object.entries(r.byYear).forEach(([y, v]) => byYear[y] = (byYear[y] || 0) + v));
+    const fisc = lsGet("carnet-fisc2", {y: {}, opt: {lys: true}}); fisc.y ||= {};
+    Object.entries(byYear).forEach(([y, v]) => { const o = fisc.y[y] ||= {tar: {}, km: "", kmRate: "", other: "", net: "", hotel: "", indem: ""}; if (!String(o.hotel || "").trim() && v) o.hotel = String(Math.round(v * 100) / 100).replace(".", ","); });
+    lsSet("carnet-fisc2", fisc); saveDb(DB);
+    const n = hotelDone.reduce((a, r) => a + r.updated + r.added, 0), add = hotelDone.reduce((a, r) => a + r.added, 0);
+    const bad = hotelDone.filter(r => !r.ok);
+    const txt = `Relevé d'hôtels : ${n} nuitée${n > 1 ? "s" : ""} (${n - add} confirmée${n - add > 1 ? "s" : ""}${add ? `, ${add} ajoutée${add > 1 ? "s" : ""}` : ""}), ${Object.entries(byYear).map(([y, v]) => `${v.toLocaleString("fr-FR", {maximumFractionDigits: 2})} € en ${y}`).join(", ")}${bad.length ? " — total du relevé différent de la somme des lignes : à vérifier" : " — total vérifié ✓"}.`;
+    if (!pending.plans.length && !errs.length) { reloadPage(txt); return; }
+    errs.unshift(txt);
+  }
   renderSetup();
   msgTo("#relMsg")(errs.length ? `Non lu : ${errs.join(" · ")}` : `${pending.plans.length} relevé(s) lu(s). Vérifie ci-dessous, puis valide.`, !errs.length);
 }
@@ -302,7 +327,7 @@ function renderHero({F,S,H,T}){
     [hm(tn), "de nuit", `${ln} arrivées de nuit`],
     [hm(sm), "simulateur", `${Sp.length} séance${Sp.length>1?"s":""}`],
     [fr(nm), "NM", `≈ ${fr(Math.round(nm*1.852))} km`],
-    [String(nights), "nuits d'hôtel", `${H.filter(h=>h.n>0).length} découchers · ${H.filter(h=>h.n===0).length} repos de jour`],
+    [String(nights), "nuits d'hôtel", [`${H.filter(isDecoucher).length} découchers`, H.filter(atBase).length && `${H.filter(atBase).length} à la base`, H.filter(h=>h.n===0).length && `${H.filter(h=>h.n===0).length} repos de jour`].filter(Boolean).join(" · ")],
     [String(T.length), "trajets perso", T.length ? [nTr && `${nTr} train${nTr>1?"s":""}`, nAv && `${nAv} avion${nAv>1?"s":""}`, nAu && `${nAu} autre${nAu>1?"s":""}`].filter(Boolean).join(" · ") : "aucun sur la période"],
     [eur(T.filter(t=>t.p!=null).reduce((x,t)=>x+t.p,0)), "billets payés", (n => n ? `${n} prix à compléter` : T.length ? "tous les prix renseignés" : "aucun trajet")(T.filter(t=>t.p==null&&(t.k==="Train"||t.k==="Avion")).length)],
     [String(new Set(F.flatMap(f=>[f.o,f.a])).size), "aéroports", `${new Set(F.flatMap(f=>[AP[f.o].p,AP[f.a].p]).filter(p => p !== "??")).size} pays`],
@@ -531,7 +556,7 @@ function paneDest({F,H}){
   let h = `<div class="summary"><span><b>${rows.length}</b> escales</span><span><b>${countries.length}</b> pays</span><span>Plus long : <b>${longest.o}→${longest.a}</b> ${hm(longest.m)}</span></div>`;
   h += `<div class="grid3"><div class="panel"><h3>Par pays (arrivées hors ${HUB})</h3>${hbars(countries.map(([k,v])=>[esc(CN[k]||k),v]))}</div>
     <div class="panel"><h3>Lignes les plus volées (${routes.length})</h3><div class="dest-scroll routes-scroll" tabindex="0" aria-label="Toutes les lignes, par nombre d'étapes">${hbars(routes.map(([k,v])=>[`<span class="mono">${k}</span>`,v]))}</div><div class="hint">Étapes dans les deux sens.${routes.length > 8 ? " Faites défiler pour tout voir." : ""}</div></div>
-    <div class="panel"><h3>Découchers par escale</h3>${hbars(group(H.filter(x=>x.n>0), x=>x.ap, x=>x.n).slice(0,8).map(([k,v])=>[`<span class="mono">${k}</span> <span class="muted">${esc(AP[k]?.c||"")}</span>`,v]))}</div></div>`;
+    <div class="panel"><h3>Découchers par escale</h3>${hbars(group(H.filter(isDecoucher), x=>x.ap, x=>x.n).slice(0,8).map(([k,v])=>[`<span class="mono">${k}</span> <span class="muted">${esc(AP[k]?.c||"")}</span>`,v]))}</div></div>`;
   h += `<div class="tw"><table><thead><tr><th>Escale</th><th>Ville</th><th>Pays</th><th class="r">Arrivées</th><th class="r">Heures (vols vers)</th><th class="r">Nuits hôtel</th><th>Dernière</th></tr></thead><tbody>`;
   rows.forEach(([k,s]) => { h += `<tr><td class="mono"><b>${k}</b></td><td>${esc(AP[k].c)}</td><td class="mono">${AP[k].p}</td><td class="r mono">${s.arr}</td><td class="r mono">${hm(s.m)}</td><td class="r mono">${s.n||'<span class="muted">—</span>'}</td><td class="mono">${fdate(s.last)}</td></tr>`; });
   return h + `</tbody></table></div>`;
@@ -549,14 +574,19 @@ function paneSimu({S}){
 }
 
 function paneHotel({H}){
-  if (!H.length) return `<div class="empty">Aucun hôtel sur cette période.</div>`;
+  const skipped = D.hotelsAll.filter(x => inP(x.d) && !countedHotel(x));
+  const skipNote = skipped.length ? `<div class="hint">${skipped.length} nuit${skipped.length>1?"s":""} non comptée${skipped.length>1?"s":""} : à la base sans hôtel confirmé par le relevé d'hôtels ou le planning, à l'aéroport du domicile, ou sans escale connue.</div>` : "";
+  if (!H.length) return `<div class="empty">Aucun découcher sur cette période.</div>` + skipNote;
   const nights = H.reduce((a,h)=>a+h.n,0), day = H.filter(h=>h.n===0).length;
-  const hotels = group(H, h => h.h, () => 1).slice(0,6);
-  let h = `<div class="summary"><span><b>${nights}</b> nuits</span><span><b>${H.length - day}</b> découchers</span><span><b>${day}</b> repos de jour</span><span><b>${new Set(H.map(x=>x.h)).size}</b> hôtels différents</span></div>`;
-  h += `<div class="panel"><h3>Hôtels les plus fréquents</h3>${hbars(hotels.map(([k,v])=>[esc(k),v]))}</div>`;
+  const named = H.filter(x => x.h), hotels = group(named, h => h.h, () => 1).slice(0,6);
+  const nBase = H.filter(atBase).length;
+  let h = `<div class="summary"><span><b>${nights}</b> nuits</span><span><b>${H.filter(isDecoucher).length}</b> découchers</span>${nBase?`<span><b>${nBase}</b> à la base</span>`:""}${day?`<span><b>${day}</b> repos de jour</span>`:""}${named.length?`<span><b>${new Set(named.map(x=>x.h)).size}</b> hôtels différents</span>`:""}</div>`;
+  const byAp = group(H.filter(isDecoucher), x => x.ap, x => x.n).slice(0,8);
+  h += `<div class="grid2"><div class="panel"><h3>Découchers par escale</h3>${hbars(byAp.map(([k,v])=>[`<span class="mono">${k}</span> <span class="muted">${esc(AP[k]?.c||"")}</span>`,v]))}</div>`
+    + (hotels.length ? `<div class="panel"><h3>Hôtels les plus fréquents</h3>${hbars(hotels.map(([k,v])=>[esc(k),v]))}</div>` : `<div class="panel"><h3>Noms des hôtels</h3><div class="muted small">Les relevés d'activité ne donnent pas le nom de l'hôtel. Importe ton planning pour les retrouver.</div></div>`) + `</div>`;
   h += `<div class="tw"><table><thead><tr><th>Arrivée</th><th>Départ</th><th>Escale</th><th>Hôtel</th><th class="r">Nuits</th></tr></thead><tbody>`;
-  H.forEach(x => { h += `<tr><td class="mono">${fdate(x.d)} <span class="muted">${x.s}</span></td><td class="mono">${x.de!==x.d?fdate(x.de)+" ":""}<span class="muted">${x.e}</span></td><td class="mono"><b>${x.ap}</b></td><td>${esc(x.h)}</td><td class="r mono">${x.n || '<span class="pill">repos de jour</span>'}</td></tr>`; });
-  return h + `</tbody></table></div>`;
+  H.forEach(x => { h += `<tr><td class="mono">${fdate(x.d)} <span class="muted">${x.s}</span></td><td class="mono">${x.de!==x.d?fdate(x.de)+" ":""}<span class="muted">${x.e}</span></td><td class="mono"><b>${x.ap}</b></td><td>${x.h ? esc(x.h) : '<span class="muted">—</span>'}</td><td class="r mono">${x.n || '<span class="pill">repos de jour</span>'}</td></tr>`; });
+  return h + `</tbody></table></div>` + skipNote;
 }
 
 // ---------- onglet Transports : billets de train et d'avion perso, saisis à la main ----------
@@ -650,7 +680,7 @@ let FISC = {y:{}, opt:{lys:true}};
 try { const s = JSON.parse(localStorage.getItem("carnet-fisc2")||"null"); if (s && s.y) FISC = Object.assign({y:{}, opt:{lys:true}}, s); } catch(e){}
 const saveFisc = () => { try { localStorage.setItem("carnet-fisc2", JSON.stringify(FISC)); } catch(e){} };
 const fy = y => (FISC.y[y] ||= {tar:{}, km:"", kmRate:"", other:"", net:"", hotel:"", indem:""});
-const fiscYears = () => [...new Set([...D.flights, ...D.hotels, ...D.trans].map(r => r.d.slice(0,4)))].sort();
+const fiscYears = () => [...new Set([...D.flights, ...D.hotelsAll, ...D.trans].map(r => r.d.slice(0,4)))].sort();
 function curFiscY(){
   const ys = fiscYears();
   if (!fiscY || !ys.includes(fiscY)) { const prev = String(+TODAY.slice(0,4) - 1); fiscY = ys.includes(prev) ? prev : ys[ys.length-1]; }
@@ -665,7 +695,7 @@ const legDates = f => ({dd: f.d, ad: f.h2 < f.h1 ? addDays(f.d, 1) : f.d});
 // Rotations : une rotation se termine à l'arrivée à la base ou au domicile quand le vol suivant part un autre jour.
 function buildRotations(){
   const legs = [...D.flights].sort((a,b) => (a.d + a.h1).localeCompare(b.d + b.h1)).map(f => ({...f, ...legDates(f)}));
-  const hot = new Set(D.hotels.filter(h => h.n > 0).map(h => h.d + "|" + h.ap));
+  const hot = new Set(D.hotelsAll.filter(h => h.n > 0).map(h => h.d + "|" + h.ap));
   const rots = []; let cur = null;
   legs.forEach(l => {
     if (!cur) { cur = {legs:[l], warn:[]}; return; }
@@ -744,7 +774,7 @@ function fiscCourrier(y){
   return {rows, by: bys, tot, awayNights};
 }
 function fiscData(y){
-  const F = D.flights.filter(f => f.d.startsWith(y)), H = D.hotels.filter(h => h.d.startsWith(y)), T = D.trans.filter(t => t.d.startsWith(y)), S = D.sims.filter(s => s.d.startsWith(y) && past(s.d));
+  const F = D.flights.filter(f => f.d.startsWith(y)), H = D.hotelsAll.filter(h => h.d.startsWith(y)), T = D.trans.filter(t => t.d.startsWith(y)), S = D.sims.filter(s => s.d.startsWith(y) && past(s.d));
   const Tc = T, Tx = [];
   const tr = Tc.filter(t => t.k === "Train"), gp = Tc.filter(t => t.k !== "Train"), paid = Tc.filter(t => t.p != null);
   return {y, F, H, T, Tc, Tx, S, tr, gp, paid, paidSum: paid.reduce((a,t) => a + t.p, 0), missing: tr.filter(t => t.p == null).length,
@@ -804,7 +834,7 @@ const finput = (attr, v, ph = "—", label = "") => `<input class="fin" inputmod
 function paneFisc(){
   if (!fiscYears().length) return `<div class="empty">Pas encore de vols.</div>`;
   const ys = fiscYears(), y = curFiscY(), x = fiscData(y), o = fy(y), c = fiscCourrier(y), s = fiscSum(y, c);
-  const dates = [...D.flights, ...D.hotels, ...D.trans].map(r => r.d).sort();
+  const dates = [...D.flights, ...D.hotelsAll, ...D.trans].map(r => r.d).sort();
   let h = `<div class="chips" role="group" aria-label="Année fiscale">${ys.map(v => `<button class="chip" data-fy="${v}" aria-pressed="${v===y}">${v}</button>`).join("")}</div>`;
   if (y === dates[0].slice(0,4)) h += `<div class="note">Le carnet commence le ${fdate(dates[0])} : ce qui précède n'y figure pas, le récap ${y} est donc incomplet.</div>`;
   if (y === TODAY.slice(0,4)) h += `<div class="note">Année en cours, arrêtée au ${fdate(TODAY)}.</div>`;

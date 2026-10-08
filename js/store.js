@@ -52,9 +52,10 @@ export function mergeCalendar(db, recs, settings){
   });
   recs.hotels.forEach(h => {
     if (isExcludedHotel(db, h)) return;
-    const ex = db.hotels.find(x => x.d === h.d && x.ap === h.ap);
+    // même nuit au même endroit ; à défaut, nuit du relevé d'activité dont l'escale n'était que déduite
+    const ex = db.hotels.find(x => x.d === h.d && x.ap === h.ap) || db.hotels.find(x => x.d === h.d && x.src === "Relevé");
     const n = Math.max(0, Math.round((Date.parse(h.de) - Date.parse(h.d)) / 864e5));
-    if (ex) { Object.assign(ex, {s: h.s, e: h.e, de: h.de, n, h: h.h || ex.h}); ex.src = addSrc(ex.src, "Calendrier"); return; }
+    if (ex) { Object.assign(ex, {s: h.s, e: h.e, de: h.de, n, h: h.h || ex.h}); if (!/Relevé hôtels/.test(ex.src || "")) ex.ap = h.ap; ex.src = addSrc(ex.src, "Calendrier"); return; }
     if (relevéCovers(db, h.d)) return;               // pas d'hôtel au relevé ce jour-là : pas d'hôtel
     db.hotels.push(Object.assign({}, h, {n, src: "Calendrier"})); r.hotels++;
   });
@@ -67,6 +68,12 @@ export function mergeCalendar(db, recs, settings){
   // Jours (OFF, congés, réserve…) : seulement là où aucun relevé ne fait foi
   Object.entries(recs.days).forEach(([d, ks]) => { if (relevéCovers(db, d)) return; db.dayCal[d] = ks; r.days++; });
   return r;
+}
+
+// Dernière escale atteinte au plus tard ce jour-là (pour placer une nuit d'hôtel sans vol ce jour-là)
+export function lastArrivalBefore(db, d){
+  let best = null; db.flights.forEach(f => { if (f.d <= d && (!best || f.d + f.h1 > best.d + best.h1)) best = f; });
+  return best ? best.a : "";
 }
 
 // ---------- import d'un relevé d'activité ----------
@@ -82,7 +89,7 @@ export function planReleve(db, rec){
   });
   const orphans = pool.filter(x => !matched.has(x));                    // vols du carnet absents du relevé
   const relHot = new Set(rec.hotels.map(h => h.d));
-  const hotelsGone = db.hotels.filter(h => inMonth(h) && !relHot.has(h.d) && h.src !== "Relevé");
+  const hotelsGone = db.hotels.filter(h => inMonth(h) && !relHot.has(h.d) && !/Relevé/.test(h.src || ""));
   return {rec, upd, add, orphans, hotelsGone, known};
 }
 // Étape 2 : appliquer, avec les choix de l'utilisateur (vols à ajouter, vols à retirer, hôtels à retirer).
@@ -108,13 +115,27 @@ export function applyReleve(db, plan, choice, settings){
   rec.hotels.forEach(h => {
     const ex = db.hotels.find(x => x.d === h.d);
     if (ex) { ex.src = addSrc(ex.src, "Relevé"); if (!ex.ap) ex.ap = h.ap; return; }
-    const ap = h.ap || (db.flights.filter(f => f.d === h.d).sort((a, b) => b.h1.localeCompare(a.h1))[0] || {}).a || "";
+    const ap = h.ap || lastArrivalBefore(db, h.d);
     db.hotels.push(Object.assign({}, h, {ap})); r.hotels++;
   });
   rec.sims.forEach(s => { if (db.sims.some(x => x.d === s.d)) return; db.sims.push(Object.assign({}, s)); r.sims++; });
   // Jours du mois : le relevé fait foi
   for (let d = rec.from; d <= rec.to; d = addDays(d, 1)) { if (rec.days[d]) db.days[d] = rec.days[d]; else delete db.days[d]; delete db.dayCal[d]; }
   db.releves[rec.ym] = {from: rec.from, to: rec.to, ok: rec.check.ok, sum: rec.check.sum, total: rec.check.total, flights: rec.flights.length, at: new Date().toISOString().slice(0, 10)};
+  return r;
+}
+
+// ---------- import du relevé d'hôtels annuel ----------
+// Il fait foi pour l'escale, le nom de l'hôtel et le coût ; une nuit qu'il contient compte toujours, même à la base.
+export function applyHotelReleve(db, hr){
+  const r = {updated: 0, added: 0, byYear: {}};
+  hr.nights.forEach(nt => {
+    r.byYear[nt.d.slice(0, 4)] = (r.byYear[nt.d.slice(0, 4)] || 0) + (nt.cost || 0);
+    db.excluded.hotels = db.excluded.hotels.filter(([d, ap]) => !(d === nt.d && ap === nt.ap));
+    const ex = db.hotels.find(x => x.d === nt.d && x.ap === nt.ap) || db.hotels.find(x => x.d === nt.d && !/Relevé hôtels/.test(x.src || "") && (x.src === "Relevé" || !x.ap));
+    if (ex) { Object.assign(ex, {ap: nt.ap, h: nt.h || ex.h, cost: nt.cost}); if (!ex.n && !ex.s) ex.n = 1; /* un repos de jour du planning (horaires connus) reste un repos de jour */ ex.src = addSrc(ex.src, "Relevé hôtels"); r.updated++; return; }
+    db.hotels.push({d: nt.d, s: "", e: "", de: addDays(nt.d, 1), ap: nt.ap, h: nt.h, n: 1, cost: nt.cost, src: "Relevé hôtels"}); r.added++;
+  });
   return r;
 }
 

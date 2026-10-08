@@ -160,7 +160,10 @@ export function releveRecords(p){
   flights.forEach(f => { (days[f.d] ||= new Set()).add("vol"); });
   const dd = {}; Object.entries(days).forEach(([d, s]) => dd[d] = [...s]);
   // Hôtels : une nuit d'hôtel compagnie ce jour-là, à la dernière escale du jour
-  const hotels = Object.entries(hotelDays).map(([d, n]) => ({d, s: "", e: "", de: addDays(d, 1), ap: lastArr[d] || "", h: "", n: 1, src: "Relevé"}));
+  // Escale de la nuit : dernière arrivée du jour, sinon la dernière arrivée connue avant (repos en escale sans vol ce jour-là)
+  const arrDays = Object.keys(lastArr).sort();
+  const apAt = d => lastArr[d] || (arrDays.filter(x => x < d).pop() ? lastArr[arrDays.filter(x => x < d).pop()] : "");
+  const hotels = Object.entries(hotelDays).map(([d, n]) => ({d, s: "", e: "", de: addDays(d, 1), ap: apAt(d), h: "", n: 1, src: "Relevé"}));
   const tot = p.total && p.total.HBB != null ? p.total.HBB : null;
   const check = {sum: Math.round(sumHBB * 100) / 100, total: tot, ok: tot != null && Math.abs(sumHBB - tot) <= 0.021, dayTotals,
     nuitDiff: flights.filter(f => f.nuitDiff).length};
@@ -170,7 +173,40 @@ export function releveRecords(p){
 }
 const fdm = d => `${d.slice(8)}/${d.slice(5, 7)}`;
 
-// Lecture complète d'un fichier PDF
+// ---------- Relevé d'hôtels (PDF annuel) ----------
+// Une ligne par nuitée : « matricule nom prénom JJ/MM/AA <IATA> <NOM HÔTEL> <coût> € », total en bas.
+const titleCase = s => s.toLowerCase().replace(/(^|[\s\-'])(\p{L})/gu, (m, a, b) => a + b.toUpperCase());
+const euros = s => parseFloat(s.replace(/\s/g, "").replace(",", "."));
+export function parseHotelPages(pages){
+  const nights = []; let total = null;
+  pages.forEach(p => groupRows(p.words).forEach(r => {
+    const t = r.map(w => w.text).join(" ");
+    const m = t.match(/(\d\d)\/(\d\d)\/(\d\d(?:\d\d)?)\s+([A-Z]{3})\s+(.+?)\s+(\d[\d\s]*(?:[.,]\d{1,2})?)\s*€/);
+    if (m) { const y = m[3].length === 2 ? "20" + m[3] : m[3];
+      nights.push({d: `${y}-${m[2]}-${m[1]}`, ap: m[4], h: titleCase(m[5].trim()), cost: euros(m[6])}); return; }
+    const tm = t.match(/total[^\d€]*(\d[\d\s]*(?:[.,]\d{1,2})?)\s*€/i);
+    if (tm) total = euros(tm[1]);
+  }));
+  return {nights, total};
+}
+
+// Lecture d'un PDF : relevé d'activité mensuel ou relevé d'hôtels annuel (reconnu tout seul)
+export async function readPdfAny(pdfjs, arrayBuffer){
+  const pages = await pdfToPages(pdfjs, new Uint8Array(arrayBuffer));
+  const all = pages.map(p => p.text).join(" ");
+  // Le relevé d'hôtels a lui aussi des dates de période en en-tête : on le reconnaît d'abord à son titre
+  if (/relev[ée]s? d['’ ]?h[ôo]tels/i.test(all)) {
+    const hr = parseHotelPages(pages);
+    if (!hr.nights.length) throw new Error("relevé d'hôtels reconnu, mais aucune nuitée lue");
+    const sum = Math.round(hr.nights.reduce((x, n) => x + (n.cost || 0), 0) * 100) / 100;
+    return {kind: "hotels", ...hr, sum, ok: hr.total == null || Math.abs(sum - hr.total) < 0.02};
+  }
+  const parsed = parsePages(pages);
+  if (parsed.from) return {kind: "activite", parsed, rec: releveRecords(parsed)};
+  const hr = parseHotelPages(pages);
+  if (hr.nights.length) return {kind: "hotels", ...hr, sum: hr.nights.reduce((x, n) => x + (n.cost || 0), 0), ok: true};
+  throw new Error("ni relevé d'activité ni relevé d'hôtels reconnu");
+}
 export async function readRelevePdf(pdfjs, arrayBuffer){
   const pages = await pdfToPages(pdfjs, new Uint8Array(arrayBuffer));
   const parsed = parsePages(pages);
