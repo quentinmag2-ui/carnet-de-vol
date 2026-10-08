@@ -5,7 +5,7 @@ import { parseIcs, parseShortcut, calendarRecords } from "./calendar.js";
 import { readRelevePdf } from "./releve.js";
 import { loadDb, saveDb, loadSettings, saveSettings, emptyDb, mergeCalendar, planReleve, applyReleve, backupObject, restoreBackup, lsGet, lsSet, K_DATA } from "./store.js";
 
-export const VERSION = "1.0.1";
+export const VERSION = "1.1.0";
 const $ = s => document.querySelector(s);
 const esc = s => String(s ?? "").replace(/[&<>"]/g, c => ({"&":"&amp;","<":"&lt;",">":"&gt;",'"':"&quot;"}[c]));
 const MO = ["janv.","févr.","mars","avr.","mai","juin","juil.","août","sept.","oct.","nov.","déc."];
@@ -295,7 +295,7 @@ function renderHero({F,S,H,T}){
   const ln = F.reduce((a,f)=>a+f.ln,0);
   const Sp = S.filter(s=>past(s.d) && simCounted(s)); const sm = Sp.reduce((a,s)=>a+s.m,0);
   const nights = H.reduce((a,h)=>a+h.n,0);
-  const cdbs = new Set(F.map(f=>f.c).filter(Boolean)).size, tn2 = F.reduce((a,f)=>a+f.tn,0);
+  const nTr = T.filter(t => t.k === "Train").length, nAv = T.filter(t => /^Avion|GP/.test(t.k || "")).length, nAu = T.length - nTr - nAv;
   const nm = F.reduce((a,f)=>a+f.nm,0);
   const tiles = [
     [fr(F.length), "étapes", `${days} jours de vol`],
@@ -303,8 +303,8 @@ function renderHero({F,S,H,T}){
     [hm(sm), "simulateur", `${Sp.length} séance${Sp.length>1?"s":""}`],
     [fr(nm), "NM", `≈ ${fr(Math.round(nm*1.852))} km`],
     [String(nights), "nuits d'hôtel", `${H.filter(h=>h.n>0).length} découchers · ${H.filter(h=>h.n===0).length} repos de jour`],
-    [String(days), "jours de vol", days ? `${hm(tm/days)} de bloc par jour` : "—"],
-    [String(cdbs), "commandants", `${tn2} décollages de nuit`],
+    [String(T.length), "trajets perso", T.length ? [nTr && `${nTr} train${nTr>1?"s":""}`, nAv && `${nAv} avion${nAv>1?"s":""}`, nAu && `${nAu} autre${nAu>1?"s":""}`].filter(Boolean).join(" · ") : "aucun sur la période"],
+    [eur(T.filter(t=>t.p!=null).reduce((x,t)=>x+t.p,0)), "billets payés", (n => n ? `${n} prix à compléter` : T.length ? "tous les prix renseignés" : "aucun trajet")(T.filter(t=>t.p==null&&(t.k==="Train"||t.k==="Avion")).length)],
     [String(new Set(F.flatMap(f=>[f.o,f.a])).size), "aéroports", `${new Set(F.flatMap(f=>[AP[f.o].p,AP[f.a].p]).filter(p => p !== "??")).size} pays`],
   ];
   $("#tiles").innerHTML = tiles.map(([v,l,s]) => `<div class="tile"><span class="eyebrow">${l}</span><b>${v}</b><span class="sub">${s}</span></div>`).join("");
@@ -559,46 +559,65 @@ function paneHotel({H}){
   return h + `</tbody></table></div>`;
 }
 
-// ---------- onglet Transports : trajets perso domicile ↔ base, saisis à la main ----------
-function paneTrans({T}){
-  const isGP = t => /GP/.test(t.k || ""), tr = T.filter(t=>t.k==="Train"), gp = T.filter(isGP), au = T.filter(t=>t.k!=="Train"&&!isGP(t));
-  const paid = T.filter(t=>t.p!=null), sum = paid.reduce((a,t)=>a+t.p,0);
-  let h = `<details class="panel fold" data-k="tadd"${openStats.tadd?" open":""}><summary><h3>Ajouter un trajet</h3></summary>
+// ---------- onglet Transports : billets de train et d'avion perso, saisis à la main ----------
+const TMODES = [["Train","Train"],["Avion GP","Avion en GP"],["Avion","Avion (billet payé)"],["Voiture","Voiture"],["Autre","Autre"]];
+const isGP = t => /GP/.test(t.k || ""), isAvion = t => /^Avion/.test(t.k || "") || isGP(t);
+const needsPrice = t => t.p == null && (t.k === "Train" || t.k === "Avion");
+let tEdit = null;   // null : formulaire fermé ; -1 : nouveau billet ; sinon index dans DB.trans
+function transForm(){
+  const t = tEdit >= 0 ? DB.trans[tEdit] : {d: TODAY, k: "Train", o: "", a: "", h1: "", h2: "", num: "", ref: "", p: null, note: ""};
+  const known = t.k && !TMODES.some(([v]) => v === t.k) ? [[t.k, t.k]] : [];
+  return `<div class="panel" id="tPanel"><h3>${tEdit >= 0 ? "Modifier le billet" : "Nouveau billet"}</h3>
     <form id="tForm" class="tform">
-      <label>Date<input type="date" name="d" required value="${TODAY}"></label>
-      <label>Mode<select name="k"><option>Train</option><option value="Avion GP">Vol GP</option><option>Voiture</option><option>Autre</option></select></label>
-      <label>De<input name="o" required placeholder="Lyon Part-Dieu"></label>
-      <label>À<input name="a" required placeholder="Aéroport CDG"></label>
-      <label>Départ<input type="time" name="h1"></label>
-      <label>Arrivée<input type="time" name="h2"></label>
-      <label>N° (train, vol)<input name="num" placeholder="OUIGO 7802"></label>
-      <label>Référence<input name="ref" placeholder="ABC123"></label>
-      <label>Prix (€)<input name="p" inputmode="decimal" placeholder="—"></label>
-      <label class="wide">Note<input name="note" placeholder="facultatif"></label>
-      <div class="actions"><button class="chip on" type="submit">Ajouter</button></div>
-    </form></details>`;
-  if (!T.length) return h + `<div class="empty">Aucun trajet sur cette période. Ajoute tes trains et vols GP pour suivre ce que tu paies (utile pour les frais réels).</div>`;
-  h += `<div class="summary"><span><b>${tr.length}</b> trains</span><span><b>${gp.length}</b> vols en GP</span>${au.length?`<span><b>${au.length}</b> autres</span>`:""}<span><b>${eur(sum)}</b> payés (${paid.length} billets)</span>${paid.length?`<span>moyenne <b>${eur(Math.round(sum/paid.length*100)/100)}</b></span>`:""}<span><b>${T.filter(t=>t.k==="Train"&&t.p==null).length}</b> prix à compléter</span></div>`;
-  h += `<div class="tw"><table><thead><tr><th>Date</th><th>Mode</th><th>Trajet</th><th>Horaires</th><th>N°</th><th>Réf.</th><th class="r">Prix</th><th>Note</th><th></th></tr></thead><tbody>`;
-  T.forEach(t => { const fut = !past(t.d), i = DB.trans.indexOf(t);
-    h += `<tr><td class="mono">${fdate(t.d)}</td><td>${isGP(t)?'<span class="pill">GP</span>':esc(t.k)}</td><td class="wrap">${esc(t.o)} <span class="muted">→</span> ${esc(t.a)}</td>
-      <td class="mono muted">${t.h1?t.h1+(t.h2?"–"+t.h2:""):"—"}</td><td class="mono">${esc(t.num)||"—"}</td><td class="mono">${esc(t.ref)||'<span class="muted">—</span>'}</td>
-      <td class="r mono">${t.p!=null?eur(t.p):(t.k==="Train"?'<span class="pill warn">à compléter</span>':'<span class="muted">—</span>')}</td>
-      <td class="wrap muted">${fut?'<span class="pill acc">à venir</span> ':""}${esc(t.note)}</td>
-      <td><button class="xbtn" type="button" data-tdel="${i}" aria-label="Supprimer ce trajet">✕</button></td></tr>`; });
-  return h + `</tbody></table></div><div class="hint">Touche ✕ deux fois pour supprimer un trajet. Les trajets restent sur ce téléphone, comme le reste du carnet.</div>`;
+      <label>Date<input type="date" name="d" required value="${esc(t.d)}"></label>
+      <label>Mode<select name="k">${[...TMODES, ...known].map(([v,l]) => `<option value="${esc(v)}"${v === t.k ? " selected" : ""}>${esc(l)}</option>`).join("")}</select></label>
+      <label>De<input name="o" required value="${esc(t.o)}" placeholder="Lyon Part-Dieu"></label>
+      <label>À<input name="a" required value="${esc(t.a)}" placeholder="Aéroport CDG 2"></label>
+      <label>Départ<input type="time" name="h1" value="${esc(t.h1)}"></label>
+      <label>Arrivée<input type="time" name="h2" value="${esc(t.h2)}"></label>
+      <label>N° de train ou de vol<input name="num" value="${esc(t.num)}" placeholder="OUIGO 7802"></label>
+      <label>Référence du billet<input name="ref" value="${esc(t.ref)}" placeholder="ABC123" autocapitalize="characters"></label>
+      <label>Prix payé (€)<input name="p" inputmode="decimal" value="${t.p != null ? String(t.p).replace(".", ",") : ""}" placeholder="vide si inconnu"></label>
+      <label>Note<input name="note" value="${esc(t.note)}" placeholder="facultatif"></label>
+      <div class="actions"><button class="chip on" type="submit">${tEdit >= 0 ? "Enregistrer" : "Ajouter"}</button>${tEdit < 0 ? `<button class="chip" type="submit" data-again="1">Ajouter + le retour</button>` : ""}<button class="chip" type="button" data-tcancel="1">Annuler</button>${tEdit >= 0 ? `<button class="chip danger" type="button" data-tdel="${tEdit}">Supprimer</button>` : ""}</div>
+    </form></div>`;
 }
+function paneTrans({T}){
+  const tr = T.filter(t=>t.k==="Train"), av = T.filter(isAvion), gp = T.filter(isGP), au = T.length - tr.length - av.length;
+  const paid = T.filter(t=>t.p!=null), sum = paid.reduce((a,t)=>a+t.p,0), todo = T.filter(needsPrice).length;
+  let h = tEdit !== null ? transForm() : `<div class="actions" style="margin-top:0"><button class="chip on" type="button" data-tnew="1">+ Ajouter un billet</button></div>`;
+  if (!T.length) return h + `<div class="empty">Aucun trajet sur cette période. Ajoute tes billets de train et d'avion pour suivre ce que tu paies (utile pour les frais réels).</div>`;
+  h += `<div class="summary"><span><b>${tr.length}</b> train${tr.length>1?"s":""}</span><span><b>${av.length}</b> avion${av.length>1?"s":""}${gp.length?` (dont ${gp.length} GP)`:""}</span>${au?`<span><b>${au}</b> autre${au>1?"s":""}</span>`:""}<span><b>${eur(sum)}</b> payés</span>${paid.length?`<span>moyenne <b>${eur(Math.round(sum/paid.length*100)/100)}</b></span>`:""}${todo?`<span><b>${todo}</b> prix à compléter</span>`:""}</div>`;
+  let cur = "";
+  h += `<div class="tlist">`;
+  T.forEach(t => { const i = DB.trans.indexOf(t), k = t.d.slice(0,7);
+    if (k !== cur) { cur = k; const ms = T.filter(x => x.d.startsWith(k)); h += `<div class="tmonth">${MOIS_L[+k.slice(5)-1]} ${k.slice(0,4)}<span class="num">${ms.length} · ${eur(ms.reduce((a,x)=>a+(x.p||0),0))}</span></div>`; }
+    h += `<button type="button" class="trow" data-tedit="${i}">
+      <span class="td mono">${fdate(t.d)}</span>
+      <span class="tm">${isGP(t) ? '<span class="pill">GP</span>' : `<span class="pill">${esc(t.k === "Avion" ? "Avion" : t.k)}</span>`}</span>
+      <span class="tt"><b>${esc(t.o)} <span class="muted">→</span> ${esc(t.a)}</b><span class="muted mono">${[t.h1 ? t.h1 + (t.h2 ? "–" + t.h2 : "") : "", t.num, t.ref].filter(Boolean).map(esc).join(" · ")}${t.note ? ` · ${esc(t.note)}` : ""}</span></span>
+      <span class="tp mono">${t.p != null ? eur(t.p) : needsPrice(t) ? '<span class="pill warn">prix ?</span>' : '<span class="muted">—</span>'}${!past(t.d) ? '<br><span class="pill acc">à venir</span>' : ""}</span></button>`; });
+  return h + `</div><div class="hint">Touche un billet pour le modifier, compléter son prix ou le supprimer. Les billets restent sur ce téléphone, comme le reste du carnet.</div>`;
+}
+const openTForm = i => { tEdit = i; renderPane(sel()); const p = $("#tPanel"); if (p) { p.scrollIntoView({behavior: "smooth", block: "start"}); } };
 $("#pane").addEventListener("submit", e => {
   if (e.target.id !== "tForm") return; e.preventDefault();
   const f = new FormData(e.target), g = k => String(f.get(k) || "").trim();
-  const p = g("p") ? parseFloat(g("p").replace(",", ".")) : null;
-  DB.trans.push({d: g("d"), k: g("k"), o: g("o"), a: g("a"), h1: g("h1"), h2: g("h2"), num: g("num"), ref: g("ref"), p: isFinite(p) ? p : null, note: g("note"), src: "Saisie"});
-  saveDb(DB); openStats.tadd = true; update();
+  const pr = g("p") ? parseFloat(g("p").replace(",", ".").replace(/[^\d.]/g, "")) : null;
+  const rec = {d: g("d"), k: g("k"), o: g("o"), a: g("a"), h1: g("h1"), h2: g("h2"), num: g("num"), ref: g("ref").toUpperCase(), p: isFinite(pr) ? pr : null, note: g("note")};
+  if (tEdit >= 0) Object.assign(DB.trans[tEdit], rec); else DB.trans.push(Object.assign(rec, {src: "Saisie"}));
+  const again = e.submitter && e.submitter.dataset.again;
+  saveDb(DB);
+  if (again) { tEdit = -1; update(); const fm = $("#tForm"); if (fm) { fm.o.value = rec.a; fm.a.value = rec.o; fm.k.value = rec.k; fm.d.value = rec.d; fm.querySelector("[name=d]").focus(); } return; }
+  tEdit = null; update();
 });
 $("#pane").addEventListener("click", e => {
+  if (e.target.closest("[data-tnew]")) { openTForm(-1); return; }
+  if (e.target.closest("[data-tcancel]")) { tEdit = null; renderPane(sel()); return; }
+  const r = e.target.closest("[data-tedit]"); if (r) { openTForm(+r.dataset.tedit); return; }
   const b = e.target.closest("[data-tdel]"); if (!b) return;
-  if (!b.dataset.armed) { b.dataset.armed = "1"; b.textContent = "Supprimer ?"; return; }
-  DB.trans.splice(+b.dataset.tdel, 1); saveDb(DB); update();
+  if (!b.dataset.armed) { b.dataset.armed = "1"; b.textContent = "Confirmer la suppression"; return; }
+  DB.trans.splice(+b.dataset.tdel, 1); tEdit = null; saveDb(DB); update();
 });
 
 // ---------- onglet Impôts ----------
