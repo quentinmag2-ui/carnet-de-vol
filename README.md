@@ -1,9 +1,9 @@
 # Carnet de vol HOP!
 
-Carnet de vol pour les PN HOP!, à ouvrir sur iPhone et à installer sur l'écran d'accueil.
+Carnet de vol pour les PN HOP!, à ouvrir sur iPhone ou Android et à installer sur l'écran d'accueil.
 
 - **Relevés d'activité PDF** (MyPeopleDoc) lus directement sur le téléphone : heures bloc réelles, immatriculations, hôtels, jours OFF, congés, réserves.
-- **Planning** importé par un raccourci iPhone ou un fichier calendrier (.ics) : vols pas encore sur un relevé, commandants, noms d'hôtels.
+- **Planning** importé par un raccourci iPhone ou un fichier calendrier .ics (Android) : vols pas encore sur un relevé, CDB, noms d'hôtels.
 - Onglets Vols (par avion, par immatriculation), Simu, Escales, Jours, Hôtels, Transports, Bilan, Impôts (frais en courrier).
 - Heures de nuit au sens EASA (crépuscule civil), calculées le long de la route.
 
