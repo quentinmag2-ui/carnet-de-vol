@@ -1,0 +1,87 @@
+<!doctype html>
+<html lang="fr">
+<head>
+<meta charset="utf-8">
+<meta name="viewport" content="width=device-width,initial-scale=1,viewport-fit=cover">
+<title>Carnet de vol</title>
+<meta name="description" content="Carnet de vol pour les PN HOP! : relevés d'activité, planning, heures de nuit, escales, impôts. Les données restent sur le téléphone.">
+<meta name="theme-color" content="#0f1f3a">
+<meta name="apple-mobile-web-app-capable" content="yes">
+<meta name="mobile-web-app-capable" content="yes">
+<meta name="apple-mobile-web-app-status-bar-style" content="default">
+<meta name="apple-mobile-web-app-title" content="Carnet de vol">
+<meta name="format-detection" content="telephone=no">
+<link rel="manifest" href="manifest.webmanifest">
+<link rel="icon" href="icons/icon-192.png" type="image/png">
+<link rel="apple-touch-icon" href="icons/icon-180.png">
+<link rel="stylesheet" href="app.css">
+</head>
+<body>
+<div class="wrap">
+  <div class="bar">
+    <div class="bar-inner">
+      <div class="bar-top">
+        <div class="brand">Carnet de vol<span class="who" id="who"></span></div>
+        <div class="bar-right"><div class="period-label" id="plabel"></div><button class="chip" type="button" id="openSetup">Importer</button></div>
+      </div>
+      <div class="chips" id="years" role="group" aria-label="Année"></div>
+      <div class="chips" id="months" role="group" aria-label="Mois"></div>
+    </div>
+  </div>
+
+  <div class="banner" id="install" hidden><span><b>Installe le carnet sur ton iPhone</b> : touche <b>Partager</b> puis « <b>Sur l'écran d'accueil</b> », et ouvre-le depuis l'icône. Importe tes données <b>depuis l'icône</b> : Safari et l'app installée ne partagent pas leurs données.</span><button type="button">OK</button></div>
+
+  <section class="block" id="setup" hidden><div class="block-head"><h2>Importer et réglages</h2><button class="chip" type="button" id="closeSetup" hidden>Fermer</button></div><div id="setupBody"></div></section>
+
+  <div class="hero">
+    <div class="hero-main">
+      <div>
+        <div class="eyebrow">Temps bloc</div>
+        <div class="big" id="kBlock"></div>
+        <div class="prog" id="kProg" hidden></div>
+      </div>
+      <div class="daynight">
+        <div class="dn-track" id="dnTrack"></div>
+        <div class="dn-legend"><span id="dnDay"></span><span id="dnNight"></span></div>
+      </div>
+    </div>
+    <div class="tiles" id="tiles"></div>
+  </div>
+
+  <section class="block">
+    <div class="block-head">
+      <h2>Heures par mois</h2>
+      <div class="legend"><span><i style="background:var(--day)"></i>Jour</span><span><i style="background:var(--night)"></i>Nuit</span></div>
+    </div>
+    <div class="panel chart"><div id="chart"></div><div class="hint">Touchez une barre pour afficher ce mois.</div></div>
+  </section>
+
+  <section class="block">
+    <div class="block-head">
+      <h2>Réseau</h2>
+      <div class="legend"><span id="mapLegend">Cercles de distance depuis la base, en NM</span></div>
+    </div>
+    <div class="two">
+      <div class="panel map"><div id="map"></div></div>
+      <div class="panel map-side">
+        <h3 id="sideTitle">Escales les plus fréquentes</h3>
+        <div class="hbars" id="topDest"></div>
+        <div id="apDetail" hidden></div>
+      </div>
+    </div>
+  </section>
+
+  <section class="block">
+    <div class="tabs" role="tablist" id="tabs"></div>
+    <div class="pane" id="pane"></div>
+  </section>
+
+  <div class="foot" id="foot"></div>
+</div>
+<div class="tip" id="tip" hidden></div>
+<div class="toast" id="toast" role="status" hidden></div>
+<button class="update" id="update" type="button" hidden>Nouvelle version disponible : toucher pour l'ouvrir</button>
+<noscript><p style="padding:16px">Le carnet a besoin de JavaScript.</p></noscript>
+<script type="module" src="js/app.js"></script>
+</body>
+</html>
