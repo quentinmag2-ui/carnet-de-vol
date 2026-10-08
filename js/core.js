@@ -3,6 +3,19 @@
 
 // Aéroports : ville, pays (ISO), latitude, longitude
 export const AIRPORTS = {
+AGF:["Agen","FR",44.174,0.591],NCY:["Annecy","FR",45.929,6.099],DOL:["Deauville","FR",49.365,0.154],LEH:["Le Havre","FR",49.534,0.088],DLE:["Dole","FR",47.039,5.427],
+BZR:["Béziers","FR",43.324,3.354],CCF:["Carcassonne","FR",43.216,2.306],LPY:["Le Puy","FR",45.081,3.763],EBU:["Saint-Étienne","FR",45.541,4.296],VAF:["Valence-Chabeuil","FR",44.921,4.970],
+XCR:["Châlons-Vatry","FR",48.776,4.206],SNR:["Saint-Nazaire","FR",47.312,-2.157],CER:["Cherbourg","FR",49.650,-1.470],BVE:["Brive","FR",45.040,1.486],DCM:["Castres","FR",43.556,2.289],
+ANG:["Angoulême","FR",45.729,0.221],LUG:["Lugano","CH",46.004,8.911],SIR:["Sion","CH",46.220,7.327],FDH:["Friedrichshafen","DE",47.671,9.511],PAD:["Paderborn","DE",51.614,8.616],
+DTM:["Dortmund","DE",51.518,7.612],FKB:["Karlsruhe","DE",48.779,8.080],SCN:["Sarrebruck","DE",49.215,7.110],ERF:["Erfurt","DE",50.980,10.958],RLG:["Rostock","DE",53.918,12.278],
+POZ:["Poznań","PL",52.421,16.826],KTW:["Katowice","PL",50.474,19.080],BTS:["Bratislava","SK",48.170,17.213],SJJ:["Sarajevo","BA",43.825,18.331],TGD:["Podgorica","ME",42.359,19.252],
+SKP:["Skopje","MK",41.962,21.621],SKG:["Thessalonique","GR",40.520,22.971],HER:["Héraklion","GR",35.340,25.180],CFU:["Corfou","GR",39.602,19.912],RHO:["Rhodes","GR",36.405,28.086],
+BGY:["Bergame","IT",45.674,9.704],AOI:["Ancône","IT",43.616,13.362],SUF:["Lamezia Terme","IT",38.905,16.242],TSF:["Trévise","IT",45.648,12.194],RMI:["Rimini","IT",44.020,12.612],
+PEG:["Pérouse","IT",43.096,12.513],PSR:["Pescara","IT",42.432,14.181],TPS:["Trapani","IT",37.912,12.488],GRX:["Grenade","ES",37.189,-3.777],RMU:["Murcie","ES",37.803,-1.125],
+LEI:["Almería","ES",36.844,-2.370],ZAZ:["Saragosse","ES",41.666,-1.042],LCG:["La Corogne","ES",43.302,-8.377],EXT:["Exeter","GB",50.734,-3.414],CWL:["Cardiff","GB",51.397,-3.343],
+JER:["Jersey","JE",49.208,-2.196],GCI:["Guernesey","GG",49.435,-2.602],INV:["Inverness","GB",57.542,-4.048],NWI:["Norwich","GB",52.676,1.283],AAR:["Aarhus","DK",56.300,10.619],
+MMX:["Malmö","SE",55.536,13.376],NOC:["Knock","IE",53.910,-8.818],KIR:["Kerry","IE",52.181,-9.524],OST:["Ostende","BE",51.199,2.862],LGG:["Liège","BE",50.637,5.443],
+CRL:["Charleroi","BE",50.459,4.453],MST:["Maastricht","NL",50.912,5.770],GRQ:["Groningue","NL",53.120,6.580],
 AGP:["Malaga","ES",36.675,-4.499],BCN:["Barcelone","ES",41.297,2.078],BER:["Berlin","DE",52.367,13.503],BES:["Brest","FR",48.448,-4.418],BHX:["Birmingham","GB",52.454,-1.748],
 BIO:["Bilbao","ES",43.301,-2.911],BIQ:["Biarritz","FR",43.468,-1.523],BLL:["Billund","DK",55.74,9.152],BOD:["Bordeaux","FR",44.828,-0.716],BRI:["Bari","IT",41.139,16.761],
 BSL:["Bâle-Mulhouse","FR",47.59,7.529],CAG:["Cagliari","IT",39.251,9.054],CDG:["Paris CDG","FR",49.01,2.548],CFE:["Clermont-Ferrand","FR",45.786,3.169],CFR:["Caen","FR",49.173,-0.45],
@@ -41,7 +54,7 @@ RIX:["Riga","LV",56.924,23.971],VNO:["Vilnius","LT",54.634,25.286],TLL:["Tallinn
 export const COUNTRY = {FR:"France",DE:"Allemagne",ES:"Espagne",IT:"Italie",GB:"Royaume-Uni",IE:"Irlande",HR:"Croatie",DK:"Danemark",SE:"Suède",SI:"Slovénie",AT:"Autriche",
  NL:"Pays-Bas",BE:"Belgique",LU:"Luxembourg",CH:"Suisse",PT:"Portugal",NO:"Norvège",FI:"Finlande",PL:"Pologne",CZ:"Tchéquie",HU:"Hongrie",RO:"Roumanie",BG:"Bulgarie",
  RS:"Serbie",GR:"Grèce",CY:"Chypre",MT:"Malte",AL:"Albanie",MA:"Maroc",DZ:"Algérie",TN:"Tunisie",IL:"Israël",TR:"Turquie",LV:"Lettonie",LT:"Lituanie",EE:"Estonie",IS:"Islande",
- BA:"Bosnie-Herzégovine",MK:"Macédoine du Nord",ME:"Monténégro",SK:"Slovaquie","??":"Pays inconnu"};
+ BA:"Bosnie-Herzégovine",MK:"Macédoine du Nord",ME:"Monténégro",SK:"Slovaquie",JE:"Jersey",GG:"Guernesey","??":"Pays inconnu"};
 
 
 const P_TZ = new Intl.DateTimeFormat("en-CA", {timeZone:"Europe/Paris", year:"numeric", month:"2-digit", day:"2-digit", hour:"2-digit", minute:"2-digit", hour12:false});

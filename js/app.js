@@ -5,7 +5,7 @@ import { parseIcs, parseShortcut, calendarRecords } from "./calendar.js";
 import { readPdfAny } from "./releve.js";
 import { loadDb, saveDb, loadSettings, saveSettings, emptyDb, mergeCalendar, planReleve, applyReleve, backupObject, restoreBackup, lsGet, lsSet, K_DATA, lastArrivalBefore, applyHotelReleve } from "./store.js";
 
-export const VERSION = "1.2.3";
+export const VERSION = "1.3.1";
 const $ = s => document.querySelector(s);
 const esc = s => String(s ?? "").replace(/[&<>"]/g, c => ({"&":"&amp;","<":"&lt;",">":"&gt;",'"':"&quot;"}[c]));
 const MO = ["janv.","févr.","mars","avr.","mai","juin","juil.","août","sept.","oct.","nov.","déc."];
@@ -45,13 +45,25 @@ const D = {gen: `${nowParts.d} ${nowParts.h}`, flights: DB.flights, sims: normSi
   days: Object.assign({}, DB.dayCal, DB.days), ap: apMap()};
 const HAS_DATA = D.flights.length > 0;
 const HUB = (() => { let b = SET.bases[0][1]; SET.bases.forEach(([from, v]) => { if (nowParts.d >= from) b = v; }); return AIRPORTS[b] ? b : "CDG"; })();   // base du moment : centre de la carte
-const unknownAps = () => [...new Set(DB.flights.flatMap(f => [f.o, f.a]).filter(k => !AIRPORTS[k]))].sort();
+// Étapes enregistrées quand un de leurs aéroports était inconnu : recalculées dès qu'il figure dans la table
+{ let ch = 0; DB.flights.forEach(f => { if (f.o !== f.a && !f.nm && AIRPORTS[f.o] && AIRPORTS[f.a]) { computeFlight(f); ch++; } }); if (ch) saveDb(DB); }
 
 // ---------- messages après rechargement ----------
 const flash = t => { try { sessionStorage.setItem("carnetHop.flash", t); } catch (e) {} };
 function reloadPage(msg){ if (msg) flash(msg); try { location.reload(); } catch (e) {} }
 function showFlash(){ let t = null; try { t = sessionStorage.getItem("carnetHop.flash"); sessionStorage.removeItem("carnetHop.flash"); } catch (e) {}
   if (!t) return; const n = $("#toast"); n.textContent = t; n.hidden = false; setTimeout(() => { n.hidden = true; }, 7000); }
+
+// ---------- téléphone : iPhone ou Android ----------
+const IOS = /iP(hone|ad|od)/.test(navigator.userAgent) || (navigator.platform === "MacIntel" && navigator.maxTouchPoints > 1);
+const ANDROID = /Android/i.test(navigator.userAgent);
+const HOWTO_ANDROID = `<details class="howto"><summary>Android : exporter son planning en fichier .ics</summary>
+  <ol>
+    <li>Si ton planning arrive dans <b>Google Agenda</b> : sur un ordinateur, ouvre <b>calendar.google.com</b> → roue dentée → <b>Paramètres</b> → <b>Importer et exporter</b> → <b>Exporter</b>. Tu obtiens un fichier .zip.</li>
+    <li>Ouvre ce .zip (app Fichiers de Google ou ordinateur) : il contient un fichier .ics par agenda. Garde celui du planning HOP! et mets-le sur ton téléphone (Drive, Téléchargements…).</li>
+    <li>Si ton planning est dans un autre agenda du téléphone, une app d'export de calendrier en .ics (Play Store) fait la même chose.</li>
+    <li>Dans le carnet : « Importer » → <b>Fichier .ics</b> → choisis le fichier. Refais-le de temps en temps : les nouveaux vols s'ajoutent, rien n'est effacé.</li>
+  </ol></details>`;
 
 // ---------- panneau « Importer et réglages » ----------
 const pending = {plans: []};   // relevés lus, en attente de validation
@@ -69,11 +81,10 @@ function setupHtml(){
   const rows = SET.bases.map(([from, b], i) => `<div class="setrow"><label>${i === 0 ? "Base" : "À partir du"} ${i === 0 ? "" : `<input type="date" data-bf="${i}" value="${from}">`}</label><input class="fin ap" maxlength="3" data-bb="${i}" value="${esc(b)}" aria-label="Code de la base">${i ? `<button class="chip" type="button" data-bdel="${i}">Retirer</button>` : ""}</div>`).join("");
   const rel = Object.keys(DB.releves).sort();
   const info = DB.flights.length ? `<div class="summary small"><span><b>${DB.flights.length}</b> étapes</span><span><b>${DB.hotels.length}</b> hôtels</span><span><b>${DB.sims.length}</b> séances simu</span><span><b>${DB.trans.length}</b> trajets</span></div>` : "";
-  const unk = unknownAps();
   const apText = Object.entries(SET.airports || {}).map(([k, v]) => `${k};${v[0]};${v[1]};${v[2]};${v[3]}`).join("\n");
   return `<div class="setup-grid">
   <div class="panel"><h3>1. Relevés d'activité (PDF)</h3>
-    <p class="muted small">Les relevés d'activité mensuels de MyPeopleDoc (heures bloc réelles, immatriculations, hôtels, jours OFF, congés, réserves) et le relevé d'hôtels annuel (escale, nom et coût de chaque nuitée). Enregistre les PDF dans l'app Fichiers, puis choisis-les ici, plusieurs à la fois si tu veux : le type de relevé est reconnu tout seul. La lecture se fait sur le téléphone.</p>
+    <p class="muted small">Les relevés d'activité mensuels de MyPeopleDoc (heures bloc réelles, immatriculations, hôtels, jours OFF, congés, réserves) et le relevé d'hôtels annuel (escale, nom et coût de chaque nuitée). Enregistre les PDF sur ton téléphone (app Fichiers sur iPhone, Téléchargements ou Drive sur Android), puis choisis-les ici, plusieurs à la fois si tu veux : le type de relevé est reconnu tout seul. La lecture se fait sur le téléphone.</p>
     <div class="actions"><label class="chip on filebtn">Choisir des relevés PDF<input type="file" id="relFile" accept="application/pdf,.pdf" multiple hidden></label></div>
     <div id="relMsg" class="impmsg" role="status"></div>
     <div id="relPlans">${pending.plans.map(releveCard).join("")}</div>
@@ -81,12 +92,12 @@ function setupHtml(){
     ${rel.length ? `<div class="hint">Relevés importés : ${rel.map(k => `${MO[+k.slice(5)-1]} ${k.slice(2,4)}${DB.releves[k].ok ? "" : " ⚠"}`).join(", ")}</div>` : ""}
   </div>
   <div class="panel"><h3>2. Planning (calendrier)</h3>
-    <p class="muted small">Pour les vols pas encore sur un relevé, le commandant et les hôtels. Lance ton raccourci « Export carnet » puis touche le bouton ci-dessous, ou choisis un fichier calendrier (.ics). Un nouvel import complète et corrige, sans jamais effacer l'historique.</p>
+    <p class="muted small">Pour les vols pas encore sur un relevé, le CDB et les hôtels. Sur iPhone, lance ton raccourci « Export carnet » puis touche « Coller le planning copié ». Sur Android, choisis un fichier calendrier (.ics) exporté de ton agenda. Un nouvel import complète et corrige, sans jamais effacer l'historique.</p>
     <div class="actions"><button class="chip on" type="button" id="impPaste">Coller le planning copié</button><label class="chip filebtn">Fichier .ics<input type="file" id="impFile" accept=".ics,text/calendar,text/plain" hidden></label></div>
     <textarea id="impText" class="ftext" rows="3" placeholder="Si le bouton « Coller » ne marche pas : appui long ici → Coller, puis « Importer le texte »"></textarea>
     <div class="actions"><button class="chip" type="button" id="impGo">Importer le texte</button></div>
     <div id="impMsg" class="impmsg" role="status"></div>${info}
-    <details class="howto"><summary>Créer le raccourci iPhone (5 minutes, une fois pour toutes)</summary>
+    ${ANDROID ? HOWTO_ANDROID : ""}<details class="howto"><summary>iPhone : créer le raccourci (5 minutes, une fois pour toutes)</summary>
       <ol>
         <li>Ouvre l'app <b>Raccourcis</b> → <b>+</b>, nomme le raccourci « Export carnet ».</li>
         <li>Ajoute l'action <b>Rechercher des événements du calendrier</b>. Touche « Ajouter un filtre » : <b>Calendrier</b> est celui où arrive ton planning HOP!, puis ajoute <b>Date de début</b> « est dans les derniers » <b>12 mois</b>. Désactive la limite de nombre.</li>
@@ -96,7 +107,7 @@ function setupHtml(){
         <li>Après « Fin de la répétition », ajoute <b>Copier dans le presse-papiers</b> (entrée : Résultats répétés).</li>
         <li>Lance le raccourci, ouvre le carnet, « Importer », puis « Coller le planning copié ».</li>
       </ol>
-    </details>
+    </details>${ANDROID ? "" : HOWTO_ANDROID}
   </div>
   <div class="panel"><h3>3. Réglages</h3>
     <div class="setrow"><label for="setName">Nom (récap impôts)</label><input id="setName" class="fin wide" value="${esc(SET.name)}" placeholder="Prénom Nom"></div>
@@ -104,13 +115,8 @@ function setupHtml(){
     <div class="actions"><button class="chip" type="button" id="bAdd">+ Changement de base</button></div>
     <div class="setrow"><label for="setHome">Aéroport proche du domicile</label><input id="setHome" class="fin ap" maxlength="3" value="${esc(SET.home)}" placeholder="LYS"></div>
     <div class="setrow"><label for="setType">Type avion par défaut (Crew Access)</label><select id="setType" class="fin">${["", "E70", "E90"].map(t => `<option value="${t}"${SET.defaultType === t ? " selected" : ""}>${t || "—"}</option>`).join("")}</select></div>
-    <div class="setrow"><label for="setSim">Simu comptés à partir du</label><input type="date" id="setSim" value="${esc(SET.simCountFrom)}"></div>
-    <div class="setrow"><label for="setSer">Séries de travail à partir du</label><input type="date" id="setSer" value="${esc(SET.seriesStart)}"></div>
-    <p class="muted small">La base découpe les rotations et sert au calcul des frais en courrier ; une nuit à la base ou à l'aéroport du domicile n'est pas un découcher. « Simu comptés à partir du » : la fin de ta qualification de type.</p>
-    <details class="howto"${unk.length ? " open" : ""}><summary>Aéroports manquants${unk.length ? ` (${unk.length} : ${unk.join(", ")})` : ""}</summary>
-      <p class="muted small">Sans coordonnées, la nuit et la distance d'une étape ne sont pas calculées. Une ligne par aéroport : <code>code;ville;pays;latitude;longitude</code>, par exemple <code>XCR;Châlons-Vatry;FR;48.776;4.206</code>.</p>
-      <textarea id="setAps" class="ftext" rows="3" placeholder="${unk.length ? esc(unk[0]) + ";Ville;FR;45.0;5.0" : "ABC;Ville;FR;45.0;5.0"}">${esc(apText)}</textarea>
-    </details>
+    <div class="setrow"><label for="setStart">Date de prise en compte</label><input type="date" id="setStart" value="${esc(SET.simCountFrom || SET.seriesStart)}"></div>
+    <p class="muted small">La base découpe les rotations et sert au calcul des frais en courrier ; une nuit à la base ou à l'aéroport du domicile n'est pas un découcher. « Date de prise en compte » : en général la fin de ta qualification de type. Les séances simulateur et la plus longue série de travail sont comptées à partir de cette date.</p>
     <div class="actions"><button class="chip on" type="button" id="setSave">Enregistrer les réglages</button></div>
     <div id="setMsg" class="impmsg" role="status"></div>
   </div>
@@ -199,7 +205,7 @@ async function saveBackup(){
   const msg = msgTo("#bkMsg"), json = JSON.stringify(backupObject(DB, SET)), name = `carnet-de-vol-${nowParts.d}.json`;
   try {
     const file = new File([json], name, {type: "application/json"});
-    if (navigator.canShare && navigator.canShare({files: [file]})) { await navigator.share({files: [file], title: "Sauvegarde du carnet de vol"}); msg("Sauvegarde prête : choisis « Enregistrer dans Fichiers ».", true); return; }
+    if (navigator.canShare && navigator.canShare({files: [file]})) { await navigator.share({files: [file], title: "Sauvegarde du carnet de vol"}); msg("Sauvegarde prête : choisis où l'enregistrer (Fichiers, Drive…).", true); return; }
   } catch (e) { if (e && e.name === "AbortError") return; }
   const a = document.createElement("a"); a.href = URL.createObjectURL(new Blob([json], {type: "application/json"})); a.download = name; document.body.appendChild(a); a.click(); a.remove();
   msg("Sauvegarde téléchargée.", true);
@@ -220,18 +226,12 @@ function bindSetup(){
     const bs = []; document.querySelectorAll("[data-bb]").forEach(inp => { const i = +inp.dataset.bb; const code = inp.value.trim().toUpperCase();
       const from = i === 0 ? "0000-01-01" : (document.querySelector(`[data-bf="${i}"]`) || {}).value; if (/^[A-Z]{3}$/.test(code) && from) bs.push([from, code]); });
     if (!bs.length || bs[0][0] !== "0000-01-01") { msg("Indique au moins la base (code à 3 lettres, ex. CDG).", false); return; }
-    const aps = {}, badAp = [];
-    $("#setAps").value.split(/\n/).map(l => l.trim()).filter(Boolean).forEach(l => { const p = l.split(/\s*;\s*/);
-      const la = parseFloat((p[3] || "").replace(",", ".")), lo = parseFloat((p[4] || "").replace(",", "."));
-      if (/^[A-Z]{3}$/i.test(p[0]) && p[1] && isFinite(la) && isFinite(lo)) aps[p[0].toUpperCase()] = [p[1], (p[2] || "??").toUpperCase(), la, lo]; else badAp.push(l); });
-    if (badAp.length) { msg(`Ligne d'aéroport illisible : « ${badAp[0]} »`, false); return; }
+    const aps = SET.airports || {};
     Object.assign(SET, {name: $("#setName").value.trim(), home: $("#setHome").value.trim().toUpperCase(), defaultType: $("#setType").value,
-      simCountFrom: $("#setSim").value, seriesStart: $("#setSer").value, airports: aps, saved: true,
+      simCountFrom: $("#setStart").value, seriesStart: $("#setStart").value, airports: aps, saved: true,
       bases: bs.sort((a, b) => a[0].localeCompare(b[0]))});
     saveSettings(SET);
-    // nouveaux aéroports ou type par défaut : on recalcule les étapes concernées
-    Object.assign(AIRPORTS, aps);
-    DB.flights.forEach(f => { if (aps[f.o] || aps[f.a]) computeFlight(f); if (!f.ty && SET.defaultType) f.ty = SET.defaultType; });
+    DB.flights.forEach(f => { if (!f.ty && SET.defaultType) f.ty = SET.defaultType; });
     saveDb(DB);
     reloadPage("Réglages enregistrés.");
   });
@@ -528,7 +528,7 @@ function paneVols({F}){
   let h = `<div class="grid3 top-stats">
     <div class="panel"><h3>Par avion</h3>${hbars(byType.map(([k,v])=>[`<span class="mono">${esc(k)}</span>`,v]), hm)}</div>
     ${fold("reg", "Par immatriculation", regHtml)}
-    ${fold("cdb", "Commandants les plus fréquents", byCdb.length?hbars(byCdb.map(([k,v])=>[esc(k),v]), hm):'<div class="muted">—</div>')}</div>`;
+    ${fold("cdb", "CDB les plus fréquents", byCdb.length?hbars(byCdb.map(([k,v])=>[esc(k),v]), hm):'<div class="muted">—</div>')}</div>`;
   h += `<input class="search" id="q" type="search" placeholder="Filtrer : vol, escale, CDB, E90, F-HBLA…" value="${esc(st.q)}" aria-label="Filtrer les vols">`;
   if (!rows.length) return h + `<div class="empty">Aucun vol ne correspond.</div>`;
   h += `<div class="tw"><table><thead><tr><th>Date</th><th>Vol</th><th>Route</th><th>Bloc</th><th class="r">Durée</th><th class="r">Nuit</th><th>Avion</th><th>Immat.</th><th>CDB</th></tr></thead><tbody>`;
@@ -1096,13 +1096,22 @@ else { document.body.classList.add("nodata"); showSetup(true);
   $("#setup .block-head").insertAdjacentHTML("afterend", `<p class="welcome">Ton carnet de vol, construit à partir de tes <b>relevés d'activité</b> HOP! et de ton <b>planning</b> : heures bloc réelles, heures de nuit EASA, immatriculations, escales, hôtels, simulateur, jours OFF, bilan de l'année et calcul des frais en courrier pour les impôts. Rien n'est envoyé nulle part : tout reste sur ce téléphone. Commence par importer un relevé d'activité ou ton planning.</p>`); }
 showFlash();
 
-// Installation sur l'écran d'accueil (iPhone) : conseillée, et à faire AVANT d'importer
+// Installation sur l'écran d'accueil : conseillée sur iPhone comme sur Android
 const standalone = window.navigator.standalone === true || matchMedia("(display-mode: standalone)").matches;
-const ios = /iP(hone|ad|od)/.test(navigator.userAgent) || (navigator.platform === "MacIntel" && navigator.maxTouchPoints > 1);
-if (ios && !standalone && !lsGet("carnetHop.installHint", false)) {
-  const b = $("#install"); b.hidden = false;
-  b.querySelector("button").addEventListener("click", () => { b.hidden = true; lsSet("carnetHop.installHint", true); });
+let installPrompt = null;
+function showInstall(){
+  if (standalone || lsGet("carnetHop.installHint", false)) return;
+  const b = $("#install"), txt = $("#installText"), go = $("#installGo");
+  if (IOS) txt.innerHTML = `<b>Installe le carnet sur ton iPhone</b> : touche <b>Partager</b> puis « <b>Sur l'écran d'accueil</b> », et ouvre-le depuis l'icône. Importe tes données <b>depuis l'icône</b> : Safari et l'app installée ne partagent pas leurs données.`;
+  else if (installPrompt) { txt.innerHTML = `<b>Installe le carnet sur ton téléphone</b> : il s'ouvrira comme une app, même sans réseau.`; go.hidden = false; }
+  else if (ANDROID) txt.innerHTML = `<b>Installe le carnet sur ton téléphone</b> : menu <b>⋮</b> de Chrome puis « <b>Installer l'application</b> » (ou « Ajouter à l'écran d'accueil »).`;
+  else return;
+  b.hidden = false;
 }
+addEventListener("beforeinstallprompt", e => { e.preventDefault(); installPrompt = e; showInstall(); });
+$("#installGo").addEventListener("click", async () => { if (!installPrompt) return; installPrompt.prompt(); try { await installPrompt.userChoice; } catch (e) {} installPrompt = null; $("#install").hidden = true; });
+$("#installOk").addEventListener("click", () => { $("#install").hidden = true; lsSet("carnetHop.installHint", true); });
+showInstall();
 // Demande au navigateur de ne pas effacer les données
 try { navigator.storage && navigator.storage.persist && navigator.storage.persist(); } catch (e) {}
 // Hors ligne et mises à jour : service worker
