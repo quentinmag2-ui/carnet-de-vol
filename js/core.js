@@ -88,6 +88,14 @@ export function blockMinutes(d, h1, h2){
   return Math.round((parisToMs(ad, h2) - parisToMs(d, h1)) / 6e4);
 }
 
+// Flotte HOP! : deux familles seulement, E70 (E170/E175) et E90 (E190/E195)
+export function normType(ty){
+  const t = String(ty || "").toUpperCase().replace(/\s/g, "");
+  if (/^E?1?7[05]$|^E1?7[05]|^ERJ?17/.test(t)) return "E70";
+  if (/^E?1?9[05]$|^E1?9[05]|^ERJ?19/.test(t)) return "E90";
+  return t;
+}
+
 // Type avion déduit de l'immatriculation (flotte HOP!) : l'immatriculation l'emporte sur le planning.
 export function typeFromReg(im){
   if (/^F-HBX/.test(im || "")) return "E70";

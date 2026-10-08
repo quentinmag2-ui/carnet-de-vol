@@ -1,6 +1,6 @@
 // Lecture du planning : fichier calendrier (.ics) ou texte copié par le raccourci iPhone (#EVT … #FIN),
 // puis reconnaissance des vols, hôtels, séances simulateur et jours (OFF, congés, réserve…).
-import { parisParts, parisToMs } from "./core.js";
+import { parisParts, parisToMs, normType } from "./core.js";
 
 // ---------- lecture des formats ----------
 function unfoldIcs(t){ return t.replace(/\r\n/g, "\n").replace(/\n[ \t]/g, ""); }
@@ -65,7 +65,7 @@ function classifyBase(ev){
   if (m && !/^(MEP|DH|DHD|TAXI|TRAIN)\b/i.test(t)) {
     const ac = (notes.match(/^\s*AC\s*:\s*([A-Z0-9]{2,4})/m) || [])[1] || "";
     const im = (notes.match(/\b(F-[A-Z]{4})\b/) || [])[1] || "";
-    return {kind:"flight", v: m[1].replace(/\s/g, ""), o: m[2], a: m[3], ty: ac, im, c: crewCdb(notes), src:"Planning"};
+    return {kind:"flight", v: m[1].replace(/\s/g, ""), o: m[2], a: m[3], ty: normType(ac), im, c: crewCdb(notes), src:"Planning"};
   }
   m = t.match(/^(?:✈️\s*)?Flight:\s*([A-Z]{3})\s*[→\-–]\s*([A-Z]{3})/i);
   if (m) {
