@@ -1,20 +1,22 @@
 // Petit générateur de classeur Excel (.xlsx), sans bibliothèque : un .xlsx est une archive zip de fichiers XML.
-// Feuilles : {name, cols: [{h: "Titre", t: "str"|"num"|"int"|"year"|"date"|"time"|"dur"|"eur"|"pct", w: largeur}], rows: [[...]], total: [...] facultatif}
+// Feuilles : {name, cols: [{h: "Titre", t: "str"|"num"|"int"|"year"|"dec"|"date"|"time"|"dur"|"eur"|"pct", w: largeur}], rows: [[...]], total: [...] facultatif}
 // Valeurs : texte, nombre, "AAAA-MM-JJ" pour une date, "HH:MM" pour une heure, minutes pour une durée.
 export function makeXlsx(sheets, meta = {}){
   const enc = new TextEncoder();
   const x = s => String(s ?? "").replace(/[&<>"]/g, c => ({"&":"&amp;","<":"&lt;",">":"&gt;",'"':"&quot;"}[c])).replace(/[\u0000-\u0008\u000B\u000C\u000E-\u001F]/g, "");
   const colName = i => { let s = ""; i++; while (i) { const r = (i - 1) % 26; s = String.fromCharCode(65 + r) + s; i = Math.floor((i - 1) / 26); } return s; };
-  // styles : 0 normal, 1 en-tête, 2 date, 3 heure, 4 durée [h]:mm, 5 euros, 6 nombre, 7 total texte, 8 total durée, 9 total euros, 10 total nombre, 11 titre, 12 entier, 13 total entier, 14 %
-  const ST = {str: 0, date: 2, time: 3, dur: 4, eur: 5, num: 6, int: 12, pct: 14, year: 0}, STT = {str: 7, date: 7, time: 7, dur: 8, eur: 9, num: 10, int: 13, pct: 7, year: 7};
+  // styles : 15 heure / durée en texte aligné à droite, 16 son total, 17 décimal 0,00, 18 son total ; 0 normal, 1 en-tête, 2 date, 3 heure, 4 durée [h]:mm, 5 euros, 6 nombre, 7 total texte, 8 total durée, 9 total euros, 10 total nombre, 11 titre, 12 entier, 13 total entier, 14 %
+  const ST = {str: 0, date: 2, time: 15, dur: 15, eur: 5, num: 6, int: 12, pct: 14, year: 0, dec: 17}, STT = {str: 7, date: 7, time: 16, dur: 16, eur: 9, num: 10, int: 13, pct: 7, year: 7, dec: 18};
   const serial = d => (Date.UTC(+d.slice(0,4), +d.slice(5,7) - 1, +d.slice(8,10)) - Date.UTC(1899, 11, 30)) / 864e5;
   function cell(ref, v, t, s){
     if (v === null || v === undefined || v === "") return "";
     if (t === "date" && /^\d{4}-\d{2}-\d{2}$/.test(v)) return `<c r="${ref}" s="${s}"><v>${serial(v)}</v></c>`;
-    if (t === "time" && /^\d{1,2}:\d{2}$/.test(v)) { const [h, m] = v.split(":"); return `<c r="${ref}" s="${s}"><v>${(+h * 60 + +m) / 1440}</v></c>`; }
-    if (t === "dur" && typeof v === "number") return `<c r="${ref}" s="${s}"><v>${v / 1440}</v></c>`;
+    // Heures et durées en texte (« 14:06 », « 282:39 ») : l'aperçu de l'iPhone et certains lecteurs affichent mal le format [h]:mm.
+    // Pour calculer, les feuilles donnent aussi des heures décimales (type "dec").
+    if (t === "time") return `<c r="${ref}" t="inlineStr" s="${s}"><is><t>${x(v)}</t></is></c>`;
+    if (t === "dur" && typeof v === "number") { const m = Math.round(v); return `<c r="${ref}" t="inlineStr" s="${s}"><is><t>${Math.floor(m / 60)}:${String(m % 60).padStart(2, "0")}</t></is></c>`; }
     if (typeof v === "number" && isFinite(v) && t !== "str") return `<c r="${ref}" s="${s}"><v>${v}</v></c>`;
-    return `<c r="${ref}" t="inlineStr" s="${t === "str" ? s : (s === 1 || s === 7 || s === 11 ? s : 0)}"><is><t xml:space="preserve">${x(v)}</t></is></c>`;
+    return `<c r="${ref}" t="inlineStr" s="${t === "str" ? s : (s === 1 || s === 7 || s === 11 || s === 16 ? s : 0)}"><is><t xml:space="preserve">${x(v)}</t></is></c>`;
   }
   function sheetXml(sh){
     const out = [], n = sh.cols.length, last = colName(n - 1);
@@ -35,27 +37,31 @@ export function makeXlsx(sheets, meta = {}){
   const nm = sheets.map(s => sheetName(s.name));
   const styles = `<?xml version="1.0" encoding="UTF-8" standalone="yes"?>
 <styleSheet xmlns="http://schemas.openxmlformats.org/spreadsheetml/2006/main">
-<numFmts count="4"><numFmt numFmtId="164" formatCode="dd/mm/yyyy"/><numFmt numFmtId="165" formatCode="hh:mm"/><numFmt numFmtId="166" formatCode="[h]:mm"/><numFmt numFmtId="167" formatCode="#,##0.00\\ &quot;€&quot;"/></numFmts>
+<numFmts count="2"><numFmt numFmtId="164" formatCode="dd/mm/yyyy"/><numFmt numFmtId="167" formatCode="#,##0.00\\ &quot;€&quot;"/></numFmts>
 <fonts count="3"><font><sz val="11"/><name val="Calibri"/></font><font><b/><sz val="11"/><name val="Calibri"/></font><font><b/><sz val="14"/><name val="Calibri"/></font></fonts>
 <fills count="3"><fill><patternFill patternType="none"/></fill><fill><patternFill patternType="gray125"/></fill><fill><patternFill patternType="solid"><fgColor rgb="FFDDE6F2"/><bgColor indexed="64"/></patternFill></fill></fills>
 <borders count="2"><border><left/><right/><top/><bottom/><diagonal/></border><border><left/><right/><top style="thin"/><bottom/><diagonal/></border></borders>
 <cellStyleXfs count="1"><xf numFmtId="0" fontId="0" fillId="0" borderId="0"/></cellStyleXfs>
-<cellXfs count="15">
+<cellXfs count="19">
 <xf numFmtId="0" fontId="0" fillId="0" borderId="0" xfId="0"/>
 <xf numFmtId="0" fontId="1" fillId="2" borderId="0" xfId="0" applyFont="1" applyFill="1"/>
 <xf numFmtId="164" fontId="0" fillId="0" borderId="0" xfId="0" applyNumberFormat="1"/>
-<xf numFmtId="165" fontId="0" fillId="0" borderId="0" xfId="0" applyNumberFormat="1"/>
-<xf numFmtId="166" fontId="0" fillId="0" borderId="0" xfId="0" applyNumberFormat="1"/>
+<xf numFmtId="0" fontId="0" fillId="0" borderId="0" xfId="0"/>
+<xf numFmtId="0" fontId="0" fillId="0" borderId="0" xfId="0"/>
 <xf numFmtId="167" fontId="0" fillId="0" borderId="0" xfId="0" applyNumberFormat="1"/>
 <xf numFmtId="0" fontId="0" fillId="0" borderId="0" xfId="0"/>
 <xf numFmtId="0" fontId="1" fillId="0" borderId="1" xfId="0" applyFont="1" applyBorder="1"/>
-<xf numFmtId="166" fontId="1" fillId="0" borderId="1" xfId="0" applyNumberFormat="1" applyFont="1" applyBorder="1"/>
+<xf numFmtId="0" fontId="1" fillId="0" borderId="1" xfId="0" applyFont="1" applyBorder="1"/>
 <xf numFmtId="167" fontId="1" fillId="0" borderId="1" xfId="0" applyNumberFormat="1" applyFont="1" applyBorder="1"/>
 <xf numFmtId="0" fontId="1" fillId="0" borderId="1" xfId="0" applyFont="1" applyBorder="1"/>
 <xf numFmtId="0" fontId="2" fillId="0" borderId="0" xfId="0" applyFont="1"/>
 <xf numFmtId="3" fontId="0" fillId="0" borderId="0" xfId="0" applyNumberFormat="1"/>
 <xf numFmtId="3" fontId="1" fillId="0" borderId="1" xfId="0" applyNumberFormat="1" applyFont="1" applyBorder="1"/>
 <xf numFmtId="9" fontId="0" fillId="0" borderId="0" xfId="0" applyNumberFormat="1"/>
+<xf numFmtId="0" fontId="0" fillId="0" borderId="0" xfId="0" applyAlignment="1"><alignment horizontal="right"/></xf>
+<xf numFmtId="0" fontId="1" fillId="0" borderId="1" xfId="0" applyFont="1" applyBorder="1" applyAlignment="1"><alignment horizontal="right"/></xf>
+<xf numFmtId="2" fontId="0" fillId="0" borderId="0" xfId="0" applyNumberFormat="1"/>
+<xf numFmtId="2" fontId="1" fillId="0" borderId="1" xfId="0" applyNumberFormat="1" applyFont="1" applyBorder="1"/>
 </cellXfs>
 <cellStyles count="1"><cellStyle name="Normal" xfId="0" builtinId="0"/></cellStyles>
 </styleSheet>`;

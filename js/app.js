@@ -6,7 +6,7 @@ import { readPdfAny } from "./releve.js";
 import { makeXlsx } from "./xlsx.js";
 import { loadDb, saveDb, loadSettings, saveSettings, emptyDb, mergeCalendar, planReleve, applyReleve, backupObject, restoreBackup, lsGet, lsSet, K_DATA, lastArrivalBefore, applyHotelReleve, isTrainingTransit } from "./store.js";
 
-export const VERSION = "1.6.0";
+export const VERSION = "1.6.1";
 const $ = s => document.querySelector(s);
 const esc = s => String(s ?? "").replace(/[&<>"]/g, c => ({"&":"&amp;","<":"&lt;",">":"&gt;",'"':"&quot;"}[c]));
 const MO = ["janv.","févr.","mars","avr.","mai","juin","juil.","août","sept.","oct.","nov.","déc."];
@@ -1200,9 +1200,9 @@ function workbookSheets(){
   const YR = ys.map(yrow), allArr = new Set(YR.flatMap(r => [...r.arr])), allPays = new Set(YR.flatMap(r => [...r.pays]));
   sheets.push({name: "Résumé", title: `Carnet de vol${SET.name ? " — " + SET.name : ""}`,
     note: `Exporté le ${fdate(TODAY)} · ${D.flights.length} étapes du ${fdate(D.flights[0].d)} au ${fdate(D.flights[D.flights.length-1].d)} · heures bloc des relevés d'activité, nuit EASA. Escales et pays : hors base et domicile.`,
-    cols: [{h:"Année", t:"year", w:9}, {h:"Étapes", t:"int", w:9}, {h:"Heures bloc", t:"dur", w:12}, {h:"dont nuit", t:"dur", w:11}, {h:"Jours de vol", t:"int", w:12}, {h:"Escales", t:"int", w:9}, {h:"Pays", t:"int", w:7}, {h:"Distance (km)", t:"int", w:13}, {h:"Découchers (nuits)", t:"int", w:17}, {h:"Séances simu", t:"int", w:13}, {h:"Heures simu", t:"dur", w:12}, {h:"MEP", t:"int", w:7}, {h:"Jours travaillés", t:"int", w:15}, {h:"Jours OFF", t:"int", w:10}, {h:"Congés", t:"int", w:9}],
-    rows: YR.map(r => r.row), filter: false,
-    total: ["Total", ...[1,2,3,4].map(i => sumBy(YR, r => r.row[i])), allArr.size, allPays.size, ...[7,8,9,10,11,12,13,14].map(i => sumBy(YR, r => r.row[i]))]});
+    cols: [{h:"Année", t:"year", w:9}, {h:"Étapes", t:"int", w:9}, {h:"Heures bloc", t:"dur", w:12}, {h:"dont nuit", t:"dur", w:11}, {h:"Jours de vol", t:"int", w:12}, {h:"Escales", t:"int", w:9}, {h:"Pays", t:"int", w:7}, {h:"Distance (km)", t:"int", w:13}, {h:"Découchers (nuits)", t:"int", w:17}, {h:"Séances simu", t:"int", w:13}, {h:"Heures simu", t:"dur", w:12}, {h:"MEP", t:"int", w:7}, {h:"Jours travaillés", t:"int", w:15}, {h:"Jours OFF", t:"int", w:10}, {h:"Congés", t:"int", w:9}, {h:"Heures bloc (décimales)", t:"dec", w:12}],
+    rows: YR.map(r => [...r.row, Math.round(r.row[2] / 60 * 100) / 100]), filter: false,
+    total: ["Total", ...[1,2,3,4].map(i => sumBy(YR, r => r.row[i])), allArr.size, allPays.size, ...[7,8,9,10,11,12,13,14].map(i => sumBy(YR, r => r.row[i])), Math.round(sumBy(YR, r => r.row[2]) / 60 * 100) / 100]});
   // Par mois
   const mks = [...new Set([...D.flights, ...D.meps, ...simsC].map(r => r.d.slice(0,7)).concat(Object.keys(M).map(d => d.slice(0,7))))].sort();
   sheets.push({name: "Par mois", cols: [{h:"Mois", w:16}, {h:"Étapes", t:"int", w:9}, {h:"Heures bloc", t:"dur", w:12}, {h:"dont nuit", t:"dur", w:11}, {h:"Jours de vol", t:"int", w:12}, {h:"MEP", t:"int", w:7}, {h:"Séances simu", t:"int", w:13}, {h:"Découchers (nuits)", t:"int", w:17}, {h:"Jours travaillés", t:"int", w:15}, {h:"Jours OFF", t:"int", w:10}, {h:"Congés", t:"int", w:9}],
@@ -1211,9 +1211,9 @@ function workbookSheets(){
         sumBy(D.hotels.filter(h => h.d.startsWith(k) && isDecoucher(h)), h => h.n), ds.length ? (c.vol||0) + (c.sol||0) + (c.res||0) : "", ds.length ? c.off || 0 : "", ds.length ? c.cp || 0 : ""]; }), filter: false});
   // Vols
   const FL = [...D.flights].sort((a, b) => (a.d + a.h1).localeCompare(b.d + b.h1));
-  sheets.push({name: "Vols", cols: [{h:"Date", t:"date", w:11}, {h:"Vol", w:10}, {h:"Départ", w:8}, {h:"Ville de départ", w:18}, {h:"Arrivée", w:8}, {h:"Ville d'arrivée", w:18}, {h:"Bloc départ", t:"time", w:11}, {h:"Bloc arrivée", t:"time", w:12}, {h:"Durée", t:"dur", w:8}, {h:"Nuit", t:"dur", w:7}, {h:"Atterrissage de nuit", w:10}, {h:"Distance (NM)", t:"int", w:13}, {h:"Avion", w:7}, {h:"Immat.", w:9}, {h:"CDB", w:20}, {h:"Heures", w:12}, {h:"Source", w:34}],
-    rows: FL.map(f => [f.d, f.v, f.o, cityOf(f.o), f.a, cityOf(f.a), f.h1, f.h2, f.m, f.n, yes(f.ln), f.nm, f.ty || "", f.im || "", f.c || "", f.pg ? "programmées" : "réelles", f.s || ""]),
-    total: [`${FL.length} étapes`, "", "", "", "", "", "", "", sumBy(FL, f => f.m), sumBy(FL, f => f.n), `${FL.filter(f => f.ln).length} de nuit`, sumBy(FL, f => f.nm)]});
+  sheets.push({name: "Vols", cols: [{h:"Date", t:"date", w:11}, {h:"Vol", w:10}, {h:"Départ", w:8}, {h:"Ville de départ", w:18}, {h:"Arrivée", w:8}, {h:"Ville d'arrivée", w:18}, {h:"Bloc départ", t:"time", w:11}, {h:"Bloc arrivée", t:"time", w:12}, {h:"Durée", t:"dur", w:8}, {h:"Nuit", t:"dur", w:7}, {h:"Durée (h décimales)", t:"dec", w:10}, {h:"Atterrissage de nuit", w:10}, {h:"Distance (NM)", t:"int", w:13}, {h:"Avion", w:7}, {h:"Immat.", w:9}, {h:"CDB", w:20}, {h:"Heures", w:12}, {h:"Source", w:34}],
+    rows: FL.map(f => [f.d, f.v, f.o, cityOf(f.o), f.a, cityOf(f.a), f.h1, f.h2, f.m, f.n, Math.round(f.m / 60 * 100) / 100, yes(f.ln), f.nm, f.ty || "", f.im || "", f.c || "", f.pg ? "programmées" : "réelles", f.s || ""]),
+    total: [`${FL.length} étapes`, "", "", "", "", "", "", "", sumBy(FL, f => f.m), sumBy(FL, f => f.n), Math.round(sumBy(FL, f => f.m) / 60 * 100) / 100, `${FL.filter(f => f.ln).length} de nuit`, sumBy(FL, f => f.nm)]});
   // Mises en place
   if (D.meps.length) { const MP = [...D.meps].sort((a, b) => (a.d + a.h1).localeCompare(b.d + b.h1));
     sheets.push({name: "MEP", note: "Mises en place (avion ou train) : hors heures de vol, utilisées pour situer le début et la fin des rotations (impôts).",
