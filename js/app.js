@@ -3,9 +3,10 @@ import "./polyfills.js";   // en premier : compléments pour les anciennes versi
 import { AIRPORTS, COUNTRY, parisParts, parisToMs, addDays, computeFlight, normType } from "./core.js";
 import { parseIcs, parseShortcut, calendarRecords } from "./calendar.js";
 import { readPdfAny } from "./releve.js";
+import { makeXlsx } from "./xlsx.js";
 import { loadDb, saveDb, loadSettings, saveSettings, emptyDb, mergeCalendar, planReleve, applyReleve, backupObject, restoreBackup, lsGet, lsSet, K_DATA, lastArrivalBefore, applyHotelReleve, isTrainingTransit } from "./store.js";
 
-export const VERSION = "1.5.4";
+export const VERSION = "1.6.0";
 const $ = s => document.querySelector(s);
 const esc = s => String(s ?? "").replace(/[&<>"]/g, c => ({"&":"&amp;","<":"&lt;",">":"&gt;",'"':"&quot;"}[c]));
 const MO = ["janv.","févr.","mars","avr.","mai","juin","juil.","août","sept.","oct.","nov.","déc."];
@@ -133,10 +134,13 @@ function setupHtml(){
     <div class="actions"><button class="chip on" type="button" id="setSave">Enregistrer les réglages</button></div>
     <div id="setMsg" class="impmsg" role="status"></div>
   </div>
-  <div class="panel"><h3>4. Sauvegarde</h3>
+  <div class="panel"><h3>4. Sauvegarde et export</h3>
     <p class="muted small">Tout est sur ce téléphone, et nulle part ailleurs. Fais une sauvegarde de temps en temps (par exemple dans iCloud Drive) : elle sert aussi à passer sur un nouveau téléphone.</p>
     <div class="actions"><button class="chip on" type="button" id="bkSave">Enregistrer une sauvegarde</button><label class="chip filebtn">Restaurer une sauvegarde<input type="file" id="bkFile" accept=".json,application/json" hidden></label><button class="chip danger" type="button" id="wipe">Tout effacer</button></div>
     <div id="bkMsg" class="impmsg" role="status"></div>
+    <p class="muted small" style="margin-top:14px">Export Excel : tout le carnet dans un classeur (résumé par année et par mois, vols, MEP, simulateur, hôtels, transports, jours, escales, immatriculations, impôts et rotations), à ouvrir dans Excel, Numbers ou Google Sheets. Ce n'est pas une sauvegarde : seul le fichier .json se restaure.</p>
+    <div class="actions"><button class="chip" type="button" id="xlsSave"${HAS_DATA ? "" : " disabled"}>Exporter en Excel (.xlsx)</button></div>
+    <div id="xlsMsg" class="impmsg" role="status"></div>
     <div class="hint">Version ${VERSION}</div>
   </div></div>`;
 }
@@ -217,14 +221,23 @@ function applyPlans(){
   reloadPage(`Relevés ${months.join(", ")} importés : ${tot.updated} étapes passées en heures réelles, ${tot.added} ajoutées${tot.removed ? `, ${tot.removed} retirées` : ""}, ${tot.hotels} nuits d'hôtel${tot.hotelsRemoved ? ` (${tot.hotelsRemoved} séjours sans hôtel retirés)` : ""}${tot.meps ? `, ${tot.meps} MEP` : ""}.`);
 }
 
-async function saveBackup(){
-  const msg = msgTo("#bkMsg"), json = JSON.stringify(backupObject(DB, SET)), name = `carnet-de-vol-${nowParts.d}.json`;
+// Fichier à enregistrer : feuille de partage du téléphone (Fichiers, Drive, mail…), sinon téléchargement
+async function shareFile(data, name, type, title, msg, what){
   try {
-    const file = new File([json], name, {type: "application/json"});
-    if (navigator.canShare && navigator.canShare({files: [file]})) { await navigator.share({files: [file], title: "Sauvegarde du carnet de vol"}); msg("Sauvegarde prête : choisis où l'enregistrer (Fichiers, Drive…).", true); return; }
+    const file = new File([data], name, {type});
+    if (navigator.canShare && navigator.canShare({files: [file]})) { await navigator.share({files: [file], title}); msg(`${what} prêt : choisis où l'enregistrer (Fichiers, Drive, mail…).`, true); return; }
   } catch (e) { if (e && e.name === "AbortError") return; }
-  const a = document.createElement("a"); a.href = URL.createObjectURL(new Blob([json], {type: "application/json"})); a.download = name; document.body.appendChild(a); a.click(); a.remove();
-  msg("Sauvegarde téléchargée.", true);
+  const a = document.createElement("a"), url = URL.createObjectURL(new Blob([data], {type})); a.href = url; a.download = name; document.body.appendChild(a); a.click(); a.remove();
+  setTimeout(() => URL.revokeObjectURL(url), 30000);
+  msg(`${what} téléchargé.`, true);
+}
+const saveBackup = () => shareFile(JSON.stringify(backupObject(DB, SET)), `carnet-de-vol-${nowParts.d}.json`, "application/json", "Sauvegarde du carnet de vol", msgTo("#bkMsg"), "Fichier de sauvegarde");
+let exportBook = null;   // fourni par main() une fois le carnet calculé
+function saveXlsx(){
+  const msg = msgTo("#xlsMsg");
+  if (!exportBook) { msg("Rien à exporter : importe d'abord un relevé ou ton planning.", false); return; }
+  let data; try { data = exportBook(); } catch (e) { console.error(e); msg("Export impossible : " + (e.message || e), false); return; }
+  shareFile(data, `carnet-de-vol-${nowParts.d}.xlsx`, "application/vnd.openxmlformats-officedocument.spreadsheetml.sheet", "Carnet de vol (Excel)", msg, "Classeur Excel");
 }
 
 function bindSetup(){
@@ -252,6 +265,7 @@ function bindSetup(){
     reloadPage("Réglages enregistrés.");
   });
   $("#bkSave").addEventListener("click", saveBackup);
+  $("#xlsSave").addEventListener("click", saveXlsx);
   $("#bkFile").addEventListener("change", e => { const f = e.target.files && e.target.files[0]; if (!f) return;
     f.text().then(t => { try { const r = restoreBackup(JSON.parse(t)); lsSet(K_DATA, r.db); saveSettings(r.settings); reloadPage("Sauvegarde restaurée."); }
       catch (err) { msgTo("#bkMsg")(err.message || "Fichier illisible.", false); } }); });
@@ -1168,6 +1182,90 @@ function update(){
   save(); const c = sel();
   renderPeriod(); renderHero(c); renderChart(); renderMap(c.F); renderTabs(c); renderPane(c);
 }
+// ---------- export Excel : tout le carnet, feuille par feuille (sans la carte) ----------
+function workbookSheets(){
+  const yes = b => b ? "oui" : "";
+  const MOISX = MOIS_L;
+  const sumBy = (arr, f) => arr.reduce((a, x) => a + (f(x) || 0), 0);
+  const ys = [...new Set([...D.flights, ...D.meps, ...D.sims, ...D.hotelsAll, ...D.trans].map(r => r.d.slice(0,4)))].sort();
+  const simsC = D.sims.filter(s => past(s.d) && simCounted(s));
+  const M = dayMap();
+  const hotelType = h => h.n === 0 ? "repos de jour" : !countedHotel(h) ? "non comptée" : atBase(h) ? "base" : "découcher";
+  const sheets = [];
+  // Résumé par année
+  const yrow = y => { const F = D.flights.filter(f => f.d.startsWith(y)), ds = Object.keys(M).filter(d => d.startsWith(y)), c = {}; ds.forEach(d => c[M[d]] = (c[M[d]] || 0) + 1);
+    const arr = new Set(F.filter(f => !isHome(f.a, f.d)).map(f => f.a)), pays = new Set(F.flatMap(f => [AP[f.o].p, AP[f.a].p]).filter(p => p && p !== "??"));
+    const S = simsC.filter(s => s.d.startsWith(y)), H = D.hotels.filter(h => h.d.startsWith(y) && isDecoucher(h));
+    return {F, row: [+y, F.length, sumBy(F, f => f.m), sumBy(F, f => f.n), new Set(F.map(f => f.d)).size, arr.size, pays.size, Math.round(sumBy(F, f => f.nm) * 1.852), sumBy(H, h => h.n), S.length, sumBy(S, s => s.m), D.meps.filter(x => x.d.startsWith(y)).length, (c.vol||0) + (c.sol||0) + (c.res||0), c.off || 0, c.cp || 0], arr, pays}; };
+  const YR = ys.map(yrow), allArr = new Set(YR.flatMap(r => [...r.arr])), allPays = new Set(YR.flatMap(r => [...r.pays]));
+  sheets.push({name: "Résumé", title: `Carnet de vol${SET.name ? " — " + SET.name : ""}`,
+    note: `Exporté le ${fdate(TODAY)} · ${D.flights.length} étapes du ${fdate(D.flights[0].d)} au ${fdate(D.flights[D.flights.length-1].d)} · heures bloc des relevés d'activité, nuit EASA. Escales et pays : hors base et domicile.`,
+    cols: [{h:"Année", t:"year", w:9}, {h:"Étapes", t:"int", w:9}, {h:"Heures bloc", t:"dur", w:12}, {h:"dont nuit", t:"dur", w:11}, {h:"Jours de vol", t:"int", w:12}, {h:"Escales", t:"int", w:9}, {h:"Pays", t:"int", w:7}, {h:"Distance (km)", t:"int", w:13}, {h:"Découchers (nuits)", t:"int", w:17}, {h:"Séances simu", t:"int", w:13}, {h:"Heures simu", t:"dur", w:12}, {h:"MEP", t:"int", w:7}, {h:"Jours travaillés", t:"int", w:15}, {h:"Jours OFF", t:"int", w:10}, {h:"Congés", t:"int", w:9}],
+    rows: YR.map(r => r.row), filter: false,
+    total: ["Total", ...[1,2,3,4].map(i => sumBy(YR, r => r.row[i])), allArr.size, allPays.size, ...[7,8,9,10,11,12,13,14].map(i => sumBy(YR, r => r.row[i]))]});
+  // Par mois
+  const mks = [...new Set([...D.flights, ...D.meps, ...simsC].map(r => r.d.slice(0,7)).concat(Object.keys(M).map(d => d.slice(0,7))))].sort();
+  sheets.push({name: "Par mois", cols: [{h:"Mois", w:16}, {h:"Étapes", t:"int", w:9}, {h:"Heures bloc", t:"dur", w:12}, {h:"dont nuit", t:"dur", w:11}, {h:"Jours de vol", t:"int", w:12}, {h:"MEP", t:"int", w:7}, {h:"Séances simu", t:"int", w:13}, {h:"Découchers (nuits)", t:"int", w:17}, {h:"Jours travaillés", t:"int", w:15}, {h:"Jours OFF", t:"int", w:10}, {h:"Congés", t:"int", w:9}],
+    rows: mks.map(k => { const F = D.flights.filter(f => f.d.startsWith(k)), ds = Object.keys(M).filter(d => d.startsWith(k)), c = {}; ds.forEach(d => c[M[d]] = (c[M[d]] || 0) + 1);
+      return [`${MOISX[+k.slice(5)-1]} ${k.slice(0,4)}`, F.length, sumBy(F, f => f.m), sumBy(F, f => f.n), new Set(F.map(f => f.d)).size, D.meps.filter(x => x.d.startsWith(k)).length, simsC.filter(s => s.d.startsWith(k)).length,
+        sumBy(D.hotels.filter(h => h.d.startsWith(k) && isDecoucher(h)), h => h.n), ds.length ? (c.vol||0) + (c.sol||0) + (c.res||0) : "", ds.length ? c.off || 0 : "", ds.length ? c.cp || 0 : ""]; }), filter: false});
+  // Vols
+  const FL = [...D.flights].sort((a, b) => (a.d + a.h1).localeCompare(b.d + b.h1));
+  sheets.push({name: "Vols", cols: [{h:"Date", t:"date", w:11}, {h:"Vol", w:10}, {h:"Départ", w:8}, {h:"Ville de départ", w:18}, {h:"Arrivée", w:8}, {h:"Ville d'arrivée", w:18}, {h:"Bloc départ", t:"time", w:11}, {h:"Bloc arrivée", t:"time", w:12}, {h:"Durée", t:"dur", w:8}, {h:"Nuit", t:"dur", w:7}, {h:"Atterrissage de nuit", w:10}, {h:"Distance (NM)", t:"int", w:13}, {h:"Avion", w:7}, {h:"Immat.", w:9}, {h:"CDB", w:20}, {h:"Heures", w:12}, {h:"Source", w:34}],
+    rows: FL.map(f => [f.d, f.v, f.o, cityOf(f.o), f.a, cityOf(f.a), f.h1, f.h2, f.m, f.n, yes(f.ln), f.nm, f.ty || "", f.im || "", f.c || "", f.pg ? "programmées" : "réelles", f.s || ""]),
+    total: [`${FL.length} étapes`, "", "", "", "", "", "", "", sumBy(FL, f => f.m), sumBy(FL, f => f.n), `${FL.filter(f => f.ln).length} de nuit`, sumBy(FL, f => f.nm)]});
+  // Mises en place
+  if (D.meps.length) { const MP = [...D.meps].sort((a, b) => (a.d + a.h1).localeCompare(b.d + b.h1));
+    sheets.push({name: "MEP", note: "Mises en place (avion ou train) : hors heures de vol, utilisées pour situer le début et la fin des rotations (impôts).",
+      cols: [{h:"Date", t:"date", w:11}, {h:"N°", w:10}, {h:"Départ", w:8}, {h:"Arrivée", w:8}, {h:"Début", t:"time", w:8}, {h:"Fin", t:"time", w:8}, {h:"Durée", t:"dur", w:8}, {h:"Mode", w:9}, {h:"Source", w:30}],
+      rows: MP.map(x => [x.d, x.v || "", x.o, x.a, x.h1, x.h2, x.m, x.mode || "Avion", x.s || ""]), total: [`${MP.length} MEP`]}); }
+  // Simulateur
+  if (D.sims.length) sheets.push({name: "Simulateur", note: "Une séance par jour de simulateur, comptée 4 h. Comptées : séances récurrentes à partir de la date de prise en compte.",
+    cols: [{h:"Date", t:"date", w:11}, {h:"Séance", w:40}, {h:"Début", t:"time", w:8}, {h:"Fin", t:"time", w:8}, {h:"Durée", t:"dur", w:8}, {h:"Lieu", w:7}, {h:"Catégorie", w:14}, {h:"Comptée", w:9}, {h:"Statut", w:9}],
+    rows: D.sims.map(s => [s.d, s.t, s.h1, s.h2, s.m, s.l || "", s.k || "", yes(simCounted(s)), past(s.d) ? "" : "à venir"]),
+    total: [`${simsC.length} comptées`, "", "", "", sumBy(simsC, s => s.m)]});
+  // Hôtels
+  const HO = [...D.hotelsAll].sort((a, b) => (a.d + (a.s || "")).localeCompare(b.d + (b.s || "")));
+  if (HO.length) sheets.push({name: "Hôtels", note: "Type : découcher (hors base), base (nuit à la base confirmée), repos de jour, non comptée (domicile ou base sans hôtel confirmé). Coût : relevé d'hôtels.",
+    cols: [{h:"Arrivée", t:"date", w:11}, {h:"Heure", t:"time", w:7}, {h:"Départ", t:"date", w:11}, {h:"Heure", t:"time", w:7}, {h:"Escale", w:7}, {h:"Ville", w:18}, {h:"Pays", w:14}, {h:"Hôtel", w:30}, {h:"Nuits", t:"int", w:7}, {h:"Type", w:14}, {h:"Coût", t:"eur", w:11}, {h:"Source", w:26}],
+    rows: HO.map(h => [h.d, h.s || "", h.de || "", h.e || "", h.ap || "", h.ap ? cityOf(h.ap) : "", h.ap ? (CNAME[ctryOf(h.ap)] || ctryOf(h.ap)) : "", h.h || "", h.n, hotelType(h), h.cost != null ? h.cost : "", h.src || ""]),
+    total: ["Découchers", "", "", "", "", "", "", "", sumBy(HO.filter(isDecoucher), h => h.n), "", sumBy(HO, h => h.cost) || ""]});
+  // Transports
+  if (D.trans.length) { const TR = [...D.trans].sort((a, b) => (a.d + (a.h1 || "")).localeCompare(b.d + (b.h1 || "")));
+    sheets.push({name: "Transports", note: "Trajets perso (train, avion, GP…) saisis dans le carnet ou repris du planning.",
+      cols: [{h:"Date", t:"date", w:11}, {h:"Mode", w:10}, {h:"De", w:22}, {h:"À", w:22}, {h:"Départ", t:"time", w:8}, {h:"Arrivée", t:"time", w:8}, {h:"N°", w:14}, {h:"Référence", w:12}, {h:"Prix", t:"eur", w:10}, {h:"Note", w:34}],
+      rows: TR.map(t => [t.d, t.k, t.o, t.a, t.h1 || "", t.h2 || "", t.num || "", t.ref || "", t.p != null ? t.p : "", t.note || ""]),
+      total: [`${TR.length} trajets`, "", "", "", "", "", "", "", sumBy(TR, t => t.p)]}); }
+  // Jours
+  const DS = Object.keys(M).sort();
+  if (DS.length) sheets.push({name: "Jours", note: `Activité de chaque jour, du ${fdate(DAYS_START)} au ${fdate(DAYS_END)} (vol = jour d'une rotation, escales comprises).`,
+    cols: [{h:"Date", t:"date", w:11}, {h:"Jour", w:7}, {h:"Activité", w:12}, {h:"Férié", w:18}],
+    rows: DS.map(d => [d, JOURS_SEM[new Date(d + "T12:00:00Z").getUTCDay()], DLAB[M[d]], feries(+d.slice(0,4))[d] || ""])});
+  // Escales
+  const es = {}; FL.forEach(f => { const s = es[f.a] ||= {arr: 0, m: 0, first: f.d, last: f.d, n: 0}; s.arr++; s.m += f.m; if (f.d > s.last) s.last = f.d; });
+  D.hotels.filter(isDecoucher).forEach(h => { if (es[h.ap]) es[h.ap].n += h.n; });
+  sheets.push({name: "Escales", cols: [{h:"Escale", w:8}, {h:"Ville", w:20}, {h:"Pays", w:16}, {h:"Arrivées", t:"int", w:9}, {h:"Heures (vols vers)", t:"dur", w:17}, {h:"Découchers (nuits)", t:"int", w:17}, {h:"Première arrivée", t:"date", w:15}, {h:"Dernière arrivée", t:"date", w:15}],
+    rows: Object.entries(es).sort((a, b) => b[1].arr - a[1].arr || b[1].m - a[1].m).map(([k, s]) => [k, cityOf(k), CNAME[ctryOf(k)] || ctryOf(k), s.arr, s.m, s.n, s.first, s.last])});
+  // Immatriculations
+  const rg = {}; FL.filter(f => f.im).forEach(f => { const r = rg[f.im] ||= {n: 0, m: 0, ty: "", first: f.d, last: f.d}; r.n++; r.m += f.m; r.ty = f.ty || r.ty; r.last = f.d; });
+  if (Object.keys(rg).length) sheets.push({name: "Immatriculations", cols: [{h:"Immat.", w:10}, {h:"Avion", w:7}, {h:"Étapes", t:"int", w:8}, {h:"Heures bloc", t:"dur", w:12}, {h:"Premier vol", t:"date", w:12}, {h:"Dernier vol", t:"date", w:12}],
+    rows: Object.entries(rg).sort((a, b) => b[1].n - a[1].n || b[1].m - a[1].m).map(([k, r]) => [k, r.ty, r.n, r.m, r.first, r.last])});
+  // Impôts : récapitulatif par année et détail des rotations
+  const fys = fiscYears(), rot = [];
+  const fis = fys.map(y => { const c = fiscCourrier(y), s = fiscSum(y, c); c.rows.forEach(w => rot.push([+y, w.r.start, w.r.end, w.r.route, w.r.X, w.r.nights.length, w.r.nights.map(n => n.ap).join(", "), w.q, w.amt != null ? w.amt : ""]));
+    return [+y, barProv(y) ? `${barYear(y)} (provisoire)` : y, c.tot.rots, c.tot.days, c.tot.nights, c.tot.jour, c.tot.q, c.tot.amt, s.km || "", s.other || "", s.ak, s.hotel || "", s.indem || "", s.reint || ""]; });
+  if (fys.length) {
+    sheets.push({name: "Impôts", note: "Frais en courrier : lettre DLF du 15/02/1999, indemnités du Groupe 1. Récap indicatif, à valider avec tes justificatifs.",
+      cols: [{h:"Année", t:"year", w:8}, {h:"Barème", w:16}, {h:"Rotations", t:"int", w:10}, {h:"Jours d'engagement", t:"int", w:17}, {h:"Découchers", t:"int", w:11}, {h:"Journées sans découcher", t:"int", w:21}, {h:"Indemnités", t:"num", w:11}, {h:"Frais en courrier", t:"eur", w:16}, {h:"Indemnités km", t:"eur", w:13}, {h:"Autres frais", t:"eur", w:12}, {h:"Case 1AK", t:"eur", w:12}, {h:"Coût des nuitées", t:"eur", w:15}, {h:"Frais d'emploi (bulletins)", t:"eur", w:22}, {h:"À réintégrer (1AJ)", t:"eur", w:17}],
+      rows: fis, filter: false});
+    if (rot.length) sheets.push({name: "Rotations", note: "Rotations retenues pour les frais en courrier (mises en place comprises).",
+      cols: [{h:"Année", t:"year", w:8}, {h:"Début", t:"date", w:11}, {h:"Fin", t:"date", w:11}, {h:"Route", w:46}, {h:"Jours", t:"int", w:7}, {h:"Découchers", t:"int", w:11}, {h:"Nuits à", w:20}, {h:"Indemnités", t:"num", w:11}, {h:"Montant", t:"eur", w:11}],
+      rows: rot, total: [`${rot.length} rotations`, "", "", "", sumBy(rot, r => r[4]), sumBy(rot, r => r[5]), "", sumBy(rot, r => r[7]), sumBy(rot, r => +r[8] || 0)]});
+  }
+  return sheets;
+}
+exportBook = () => makeXlsx(workbookSheets(), {title: "Carnet de vol", author: SET.name || "Carnet de vol"});
+
 $("#foot").innerHTML = `<div>Dernière mise à jour : ${DB.imported ? fdate(DB.imported.slice(0,10)) : "—"}${Object.keys(DB.releves).length ? ` · relevés d'activité : ${Object.keys(DB.releves).sort().map(k => MOIS[+k.slice(5)-1] + " " + k.slice(2,4)).join(", ")}` : ""}. Pour actualiser, importe ton planning ou un nouveau relevé depuis « Importer » : les nouvelles données s'ajoutent, l'historique est conservé.</div>
 <div>Heures bloc : relevés d'activité HOP! (heures réelles) quand ils sont importés, sinon planning. « prog. » signale une étape encore en heures programmées. Nuit au sens EASA : de la fin du crépuscule civil du soir au début de l'aube civile, calculée minute par minute le long de la route orthodromique. « ATT N » = arrivée de nuit.</div>
 <div>Tout est calculé et enregistré sur ce téléphone : aucune donnée n'est envoyée. Le récap impôts est indicatif, à valider avec tes justificatifs.</div>`;
