@@ -272,3 +272,6 @@ details.rcard[open]>summary{margin-bottom:4px}
 .chart-scroll::-webkit-scrollbar{display:none}
 .chart-scroll.scrolls{-webkit-mask-image:linear-gradient(to right,transparent,#000 14px,#000 calc(100% - 14px),transparent);mask-image:linear-gradient(to right,transparent,#000 14px,#000 calc(100% - 14px),transparent)}
 .chart .chart-wrap svg{display:block;max-width:none}
+
+/* exemples dans les champs : bien distincts d'une valeur saisie */
+.fin::placeholder{color:var(--ink-3);opacity:.55}
