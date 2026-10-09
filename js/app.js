@@ -5,7 +5,7 @@ import { parseIcs, parseShortcut, calendarRecords } from "./calendar.js";
 import { readPdfAny } from "./releve.js";
 import { loadDb, saveDb, loadSettings, saveSettings, emptyDb, mergeCalendar, planReleve, applyReleve, backupObject, restoreBackup, lsGet, lsSet, K_DATA, lastArrivalBefore, applyHotelReleve, isTrainingTransit } from "./store.js";
 
-export const VERSION = "1.5.1";
+export const VERSION = "1.5.2";
 const $ = s => document.querySelector(s);
 const esc = s => String(s ?? "").replace(/[&<>"]/g, c => ({"&":"&amp;","<":"&lt;",">":"&gt;",'"':"&quot;"}[c]));
 const MO = ["janv.","févr.","mars","avr.","mai","juin","juil.","août","sept.","oct.","nov.","déc."];
@@ -843,9 +843,13 @@ function fiscData(y){
   return {y, F, H, T, Tc, Tx, S, tr, gp, paid, paidSum: paid.reduce((a,t) => a + t.p, 0), missing: tr.filter(t => t.p == null).length,
     days: new Set(F.map(f => f.d)).size, block: F.reduce((a,f) => a + f.m, 0)};
 }
+const hotelCost = y => { const hs = (D.hotelsAll || D.hotels).filter(h => h.d.startsWith(y) && h.cost != null);
+  return {n: hs.length, sum: Math.round(hs.reduce((a, h) => a + h.cost, 0) * 100) / 100}; };
 function fiscSum(y, c){
   const o = fy(y), km = toNum(o.km) * toNum(o.kmRate), other = toNum(o.other), courrier = c.tot.amt;
-  const ak = courrier + km + other, hotel = toNum(o.hotel), indem = toNum(o.indem), net = toNum(o.net), reint = hotel + indem;
+  // Coût réel des nuitées : somme du relevé d'hôtels de l'année quand il est importé, sinon le montant saisi
+  const hc = hotelCost(y), hotel = hc.n ? hc.sum : toNum(o.hotel);
+  const ak = courrier + km + other, indem = toNum(o.indem), net = toNum(o.net), reint = hotel + indem;
   return {courrier, km, other, ak, hotel, indem, reint, net, aj: net ? net + reint : null};
 }
 // Contrôles de cohérence entre vols, hôtels et simulateur
@@ -926,7 +930,7 @@ function paneFisc(){
   h += `<div class="panel"><h3>Contrôles (${checks.length})</h3>${checks.length ? `<ul class="checks">${checks.map(m => `<li>${esc(m)}</li>`).join("")}</ul>` : `<div class="muted">Aucune anomalie détectée.</div>`}</div>`;
   h += `<div class="panel"><h3>Réintégrations dans le revenu (case 1AJ)</h3><div class="tw"><table><tbody>
     <tr><td>Net imposable annuel (bulletin de décembre), facultatif</td><td class="r">${finput(`data-f="net"`, o.net, "—", "Net imposable annuel")}</td></tr>
-    <tr><td>Coût réel des nuitées (document Relevés Hôtels ${y})</td><td class="r">${finput(`data-f="hotel"`, o.hotel, "—", "Coût réel des nuitées")}</td></tr>
+    <tr><td>Coût réel des nuitées (document Relevés Hôtels ${y})${hotelCost(y).n ? `<div class="hint" style="margin:2px 0 0">D'après le relevé d'hôtels ${y} : ${hotelCost(y).n} nuitée${hotelCost(y).n > 1 ? "s" : ""}, calculé automatiquement</div>` : ""}</td><td class="r">${hotelCost(y).n ? `<b class="mono">${eur(hotelCost(y).sum)}</b>` : finput(`data-f="hotel"`, o.hotel, "—", "Coût réel des nuitées")}</td></tr>
     <tr><td>Autres frais d'emploi des bulletins (forfait transport PN, repas en France, repas à l'étranger…)</td><td class="r">${finput(`data-f="indem"`, o.indem, "—", "Frais d'emploi des bulletins")}</td></tr>
     <tr><td><b>Total à réintégrer</b></td><td class="r mono" id="s-reint">${s.reint ? eur(s.reint) : "—"}</td></tr>
     <tr><td><b>Case 1AJ</b> (net imposable + réintégrations)</td><td class="r mono" id="s-aj">${s.aj != null ? eur(s.aj) : "—"}</td></tr></tbody></table></div>
