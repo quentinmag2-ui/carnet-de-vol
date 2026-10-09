@@ -6,7 +6,7 @@ import { readPdfAny } from "./releve.js";
 import { makeXlsx } from "./xlsx.js";
 import { loadDb, saveDb, loadSettings, saveSettings, emptyDb, mergeCalendar, planReleve, applyReleve, backupObject, restoreBackup, lsGet, lsSet, K_DATA, lastArrivalBefore, applyHotelReleve, isTrainingTransit } from "./store.js";
 
-export const VERSION = "1.6.4";
+export const VERSION = "1.6.5";
 const $ = s => document.querySelector(s);
 const esc = s => String(s ?? "").replace(/[&<>"]/g, c => ({"&":"&amp;","<":"&lt;",">":"&gt;",'"':"&quot;"}[c]));
 const MO = ["janv.","févr.","mars","avr.","mai","juin","juil.","août","sept.","oct.","nov.","déc."];
@@ -130,7 +130,7 @@ function setupHtml(){
     <div class="setrow"><label for="setName">Nom (récap impôts)</label><input id="setName" class="fin wide" value="${esc(SET.name)}" placeholder="Prénom Nom"></div>
     ${rows}
     <div class="actions"><button class="chip" type="button" id="bAdd">+ Changement de base</button></div>
-    <div class="setrow"><label for="setHome">Aéroport proche du domicile</label><input id="setHome" class="fin ap" maxlength="3" value="${esc(SET.home)}" placeholder="LYS"></div>
+    <div class="setrow"><label for="setHome">Aéroport proche du domicile <span class="muted">(facultatif, ex. LYS)</span></label><input id="setHome" class="fin ap" maxlength="3" value="${esc(SET.home)}" placeholder="—"></div>
     <div class="setrow"><label for="setType">Type avion par défaut (Crew Access)</label><select id="setType" class="fin">${["", "E70", "E90"].map(t => `<option value="${t}"${SET.defaultType === t ? " selected" : ""}>${t || "—"}</option>`).join("")}</select></div>
     <div class="setrow"><label for="setStart">Date de prise en compte</label><input type="date" id="setStart" value="${esc(SET.simCountFrom || SET.seriesStart)}"></div>
     <p class="muted small">La base découpe les rotations et sert au calcul des frais en courrier ; une nuit à la base ou à l'aéroport du domicile n'est pas un découcher. « Date de prise en compte » : en général la fin de ta qualification de type. Les séances simulateur et la plus longue série de travail sont comptées à partir de cette date.</p>
