@@ -5,7 +5,7 @@ import { parseIcs, parseShortcut, calendarRecords } from "./calendar.js";
 import { readPdfAny } from "./releve.js";
 import { loadDb, saveDb, loadSettings, saveSettings, emptyDb, mergeCalendar, planReleve, applyReleve, backupObject, restoreBackup, lsGet, lsSet, K_DATA, lastArrivalBefore, applyHotelReleve, isTrainingTransit } from "./store.js";
 
-export const VERSION = "1.5.0";
+export const VERSION = "1.5.1";
 const $ = s => document.querySelector(s);
 const esc = s => String(s ?? "").replace(/[&<>"]/g, c => ({"&":"&amp;","<":"&lt;",">":"&gt;",'"':"&quot;"}[c]));
 const MO = ["janv.","févr.","mars","avr.","mai","juin","juil.","août","sept.","oct.","nov.","déc."];
@@ -167,7 +167,7 @@ async function getPdfjs(){
 }
 async function readReleves(files){
   const msg = msgTo("#relMsg"); msg(`Lecture de ${files.length} fichier(s)…`, true);
-  const errs = [], hotelDone = [];
+  const errs = [], hotelDone = []; let info = "";
   try { await getPdfjs(); } catch (e) { msg("Le lecteur PDF n'a pas pu se charger : " + e.message, false); return; }
   for (const f of files) {
     try {
@@ -190,10 +190,11 @@ async function readReleves(files){
     const bad = hotelDone.filter(r => !r.ok);
     const txt = `Relevé d'hôtels : ${n} nuitée${n > 1 ? "s" : ""} (${n - add} confirmée${n - add > 1 ? "s" : ""}${add ? `, ${add} ajoutée${add > 1 ? "s" : ""}` : ""}), ${Object.entries(byYear).map(([y, v]) => `${v.toLocaleString("fr-FR", {maximumFractionDigits: 2})} € en ${y}`).join(", ")}${bad.length ? " — total du relevé différent de la somme des lignes : à vérifier" : " — total vérifié ✓"}.`;
     if (!pending.plans.length && !errs.length) { reloadPage(txt); return; }
-    errs.unshift(txt);
+    info = txt;
   }
   renderSetup();
-  msgTo("#relMsg")(errs.length ? `Non lu : ${errs.join(" · ")}` : `${pending.plans.length} relevé(s) lu(s). Vérifie ci-dessous, puis valide.`, !errs.length);
+  const lus = pending.plans.length ? `${pending.plans.length} relevé(s) d'activité lu(s) : vérifie ci-dessous, puis valide.` : "";
+  msgTo("#relMsg")([info, lus, errs.length ? `Non lu : ${errs.join(" · ")}` : ""].filter(Boolean).join(" "), !errs.length);
 }
 function applyPlans(){
   const tot = {updated: 0, added: 0, removed: 0, hotels: 0, hotelsRemoved: 0, sims: 0, meps: 0}, months = [];

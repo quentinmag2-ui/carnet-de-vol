@@ -174,7 +174,8 @@ export function releveRecords(p){
   const arrDays = Object.keys(lastArr).sort();
   const apAt = d => lastArr[d] || (arrDays.filter(x => x < d).pop() ? lastArr[arrDays.filter(x => x < d).pop()] : "");
   const hotels = Object.entries(hotelDays).map(([d, n]) => ({d, s: "", e: "", de: addDays(d, 1), ap: apAt(d), h: "", n: 1, src: "Relevé"}));
-  const tot = p.total && p.total.HBB != null ? p.total.HBB : null;
+  // Mois sans vol (stage, simulateur, congés) : la ligne TOTAL GENERAL existe mais n'a pas de colonne HBB → 0 h
+  const tot = p.total ? (p.total.HBB ?? 0) : null;
   const check = {sum: Math.round(sumHBB * 100) / 100, total: tot, ok: tot != null && Math.abs(sumHBB - tot) <= 0.021, dayTotals,
     nuitDiff: flights.filter(f => f.nuitDiff).length};
   if (tot == null) warn.push("Ligne TOTAL GENERAL non trouvée : contrôle du total impossible");
