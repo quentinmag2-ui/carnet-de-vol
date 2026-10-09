@@ -6,7 +6,7 @@ import { readPdfAny } from "./releve.js";
 import { makeXlsx } from "./xlsx.js";
 import { loadDb, saveDb, loadSettings, saveSettings, emptyDb, mergeCalendar, planReleve, applyReleve, backupObject, restoreBackup, lsGet, lsSet, K_DATA, lastArrivalBefore, applyHotelReleve, isTrainingTransit } from "./store.js";
 
-export const VERSION = "1.6.3";
+export const VERSION = "1.6.4";
 const $ = s => document.querySelector(s);
 const esc = s => String(s ?? "").replace(/[&<>"]/g, c => ({"&":"&amp;","<":"&lt;",">":"&gt;",'"':"&quot;"}[c]));
 const MO = ["janv.","févr.","mars","avr.","mai","juin","juil.","août","sept.","oct.","nov.","déc."];
@@ -52,6 +52,7 @@ if ((DB.meps || []).some(x => x.mode === "Voiture")) { DB.meps = DB.meps.filter(
 const D = {gen: `${nowParts.d} ${nowParts.h}`, flights: DB.flights, meps: DB.meps || [], sims: normSims(DB.sims), hotels: DB.hotels.filter(countedHotel), hotelsAll: DB.hotels, trans: DB.trans,
   days: Object.assign({}, DB.dayCal, DB.days), ap: apMap()};
 const HAS_DATA = D.flights.length > 0;
+const HAS_CDB = D.flights.some(f => f.c);   // noms des CDB : seulement avec l'import du planning
 const HUB = (() => { let b = SET.bases[0][1]; SET.bases.forEach(([from, v]) => { if (nowParts.d >= from) b = v; }); return AIRPORTS[b] ? b : "CDG"; })();   // base du moment : centre de la carte
 // Étapes enregistrées quand un de leurs aéroports était inconnu : recalculées dès qu'il figure dans la table
 { let ch = 0; DB.flights.forEach(f => { if (f.o !== f.a && !f.nm && AIRPORTS[f.o] && AIRPORTS[f.a]) { computeFlight(f); ch++; } }); if (ch) saveDb(DB); }
@@ -74,7 +75,8 @@ const HOWTO_ANDROID = `<details class="howto"><summary>Android : exporter son pl
   </ol></details>`;
 
 // ---------- panneau « Importer et réglages » ----------
-const pending = {plans: []};   // relevés lus, en attente de validation
+const pending = {plans: []};
+let planOpen = false;   // encadré « Planning » ouvert ou replié (gardé quand l'écran se redessine)   // relevés lus, en attente de validation
 const firstMonth = p => !p.upd.length && !p.orphans.length;   // rien dans le carnet ce mois-là : tout s'ajoute, sans question
 const nChoices = p => (firstMonth(p) ? 0 : p.add.length) + p.orphans.length + p.hotelsGone.length;
 function releveCard(p, i){
@@ -103,14 +105,15 @@ function setupHtml(){
     ${pending.plans.length ? `<div class="actions relbar"><button class="chip on" type="button" data-rel="apply">Tout valider (${pending.plans.length} relevé${pending.plans.length > 1 ? "s" : ""})</button><button class="chip" type="button" data-rel="cancel">Annuler</button></div><div class="hint">Les choix conseillés sont déjà cochés. Touche un relevé pour voir son détail et ses choix${pending.plans.some(nChoices) ? ` (${pending.plans.reduce((a, p) => a + nChoices(p), 0)} au total)` : ""}.</div>` : ""}
     <div id="relPlans">${pending.plans.map(releveCard).join("")}</div>
     ${pending.plans.length > 3 ? `<div class="actions"><button class="chip on" type="button" data-rel="apply">Tout valider</button><button class="chip" type="button" data-rel="cancel">Annuler</button></div>` : ""}
-    ${rel.length ? `<div class="hint">Relevés importés : ${rel.map(k => `${MO[+k.slice(5)-1]} ${k.slice(2,4)}${DB.releves[k].ok ? "" : " ⚠"}`).join(", ")}</div>` : ""}
+    ${rel.length ? `<div class="hint">Relevés importés : ${rel.map(k => `${MO[+k.slice(5)-1]} ${k.slice(2,4)}${DB.releves[k].ok ? "" : " ⚠"}`).join(", ")}</div>` : ""}${info}
   </div>
-  <div class="panel"><h3>2. Planning (calendrier)</h3>
-    <p class="muted small">Pour les vols pas encore sur un relevé, le CDB et les hôtels. Sur iPhone, lance ton raccourci « Export carnet » puis touche « Coller le planning copié ». Sur Android, choisis un fichier calendrier (.ics) exporté de ton agenda. Un nouvel import complète et corrige, sans jamais effacer l'historique.</p>
+  <details class="panel fold" id="planBox"${planOpen ? " open" : ""}><summary><h3>2. Planning <span class="muted">(facultatif)</span></h3></summary>
+    <p class="small"><b>Les relevés suffisent pour le carnet.</b> Le planning sert seulement à suivre le mois en cours avant l'arrivée de son relevé (vols, jours OFF, rotations), et à ajouter les noms des CDB et des hôtels.</p>
+    <p class="muted small">Sur iPhone, lance ton raccourci « Export carnet » puis touche « Coller le planning copié ». Sur Android, choisis un fichier calendrier (.ics) exporté de ton agenda. Un nouvel import complète et corrige, sans jamais effacer l'historique.</p>
     <div class="actions"><button class="chip on" type="button" id="impPaste">Coller le planning copié</button><label class="chip filebtn">Fichier .ics<input type="file" id="impFile" accept=".ics,text/calendar,text/plain" hidden></label></div>
     <textarea id="impText" class="ftext" rows="3" placeholder="Si le bouton « Coller » ne marche pas : appui long ici → Coller, puis « Importer le texte »"></textarea>
     <div class="actions"><button class="chip" type="button" id="impGo">Importer le texte</button></div>
-    <div id="impMsg" class="impmsg" role="status"></div>${info}
+    <div id="impMsg" class="impmsg" role="status"></div>
     ${ANDROID ? HOWTO_ANDROID : ""}<details class="howto"><summary>iPhone : créer le raccourci (5 minutes, une fois pour toutes)</summary>
       <ol>
         <li>Ouvre l'app <b>Raccourcis</b> → <b>+</b>, nomme le raccourci « Export carnet ».</li>
@@ -122,7 +125,7 @@ function setupHtml(){
         <li>Lance le raccourci, ouvre le carnet, « Importer », puis « Coller le planning copié ».</li>
       </ol>
     </details>${ANDROID ? "" : HOWTO_ANDROID}
-  </div>
+  </details>
   <div class="panel"><h3>3. Réglages</h3>
     <div class="setrow"><label for="setName">Nom (récap impôts)</label><input id="setName" class="fin wide" value="${esc(SET.name)}" placeholder="Prénom Nom"></div>
     ${rows}
@@ -273,7 +276,8 @@ function bindSetup(){
     if (b.dataset.armed) { lsSet(K_DATA, emptyDb()); reloadPage("Données effacées. Les réglages sont conservés."); }
     else { b.dataset.armed = "1"; b.textContent = "Confirmer : tout effacer"; } });
 }
-function renderSetup(){ $("#setupBody").innerHTML = setupHtml(); bindSetup(); }
+function renderSetup(){ $("#setupBody").innerHTML = setupHtml(); bindSetup();
+  const pb = $("#planBox"); if (pb) pb.addEventListener("toggle", () => { planOpen = pb.open; }); }
 function showSetup(open){ const s = $("#setup"); s.hidden = !open; if (open) renderSetup(); }
 
 function main(){
@@ -606,25 +610,25 @@ function paneVols({F, M}){
   const regMax = byReg.length ? byReg[0][1].n : 1, noReg = F.filter(f => !f.im).length;
   const regHtml = byReg.length ? `<div class="dest-scroll"><div class="hbars">${byReg.map(([k,r],i) => `<div class="hb reg"><span class="lab"><span class="muted">${i+1}.</span> <span class="mono">${esc(k)}</span> <span class="muted">${esc(r.ty||"")}</span></span><span class="tr"><i style="width:${r.n/regMax*100}%"></i></span><span class="v">${r.n} · ${hm(r.m)}</span></div>`).join("")}</div></div><div class="hint">${byReg.length} avions différents · étapes et heures bloc${noReg ? ` · ${noReg} étape${noReg>1?"s":""} sans immatriculation (pas encore de relevé)` : ""}</div>` : '<div class="muted">Pas d\'immatriculation sur cette période (elles viennent des relevés d\'activité).</div>';
   const fold = (k, title, body) => `<details class="panel fold" data-k="${k}"${openStats[k]?" open":""}><summary><h3>${title}</h3></summary>${body}</details>`;
-  let h = `<div class="grid3 top-stats">
+  let h = `<div class="${HAS_CDB ? "grid3" : "grid2"} top-stats">
     <div class="panel"><h3>Par avion</h3>${hbars(byType.map(([k,v])=>[`<span class="mono">${esc(k)}</span>`,v]), hm)}</div>
     ${fold("reg", "Par immatriculation", regHtml)}
-    ${fold("cdb", "CDB les plus fréquents", byCdb.length?hbars(byCdb.map(([k,v])=>[esc(k),v]), hm):'<div class="muted">—</div>')}</div>`;
-  h += `<div class="vtools"><input class="search" id="q" type="search" placeholder="Filtrer : vol, escale, CDB, E90, F-HBLA…" value="${esc(st.q)}" aria-label="Filtrer les vols">${M.length ? `<button class="chip" type="button" data-mep="1" aria-pressed="${!!st.mep}">${st.mep ? "Masquer" : "Afficher"} les MEP (${M.length})</button>` : ""}</div>`;
+    ${HAS_CDB ? fold("cdb", "CDB les plus fréquents", byCdb.length?hbars(byCdb.map(([k,v])=>[esc(k),v]), hm):'<div class="muted">—</div>') : ""}</div>`;
+  h += `<div class="vtools"><input class="search" id="q" type="search" placeholder="Filtrer : vol, escale, ${HAS_CDB ? "CDB, " : ""}E90, F-HBLA…" value="${esc(st.q)}" aria-label="Filtrer les vols">${M.length ? `<button class="chip" type="button" data-mep="1" aria-pressed="${!!st.mep}">${st.mep ? "Masquer" : "Afficher"} les MEP (${M.length})</button>` : ""}</div>`;
   if (st.mep && M.length) h += `<div class="hint" style="margin-top:-8px">Les mises en place (MEP) sont en gris : elles ne comptent ni dans les étapes ni dans les heures, mais situent le début et la fin des rotations pour les impôts.</div>`;
   if (!rows.length) return h + `<div class="empty">Aucun vol ne correspond.</div>`;
-  h += `<div class="tw"><table><thead><tr><th>Date</th><th>Vol</th><th>Route</th><th>Bloc</th><th class="r">Durée</th><th class="r">Nuit</th><th>Avion</th><th>Immat.</th><th>CDB</th></tr></thead><tbody>`;
+  h += `<div class="tw"><table><thead><tr><th>Date</th><th>Vol</th><th>Route</th><th>Bloc</th><th class="r">Durée</th><th class="r">Nuit</th><th>Avion</th><th>Immat.</th>${HAS_CDB ? "<th>CDB</th>" : ""}</tr></thead><tbody>`;
   let cur = "";
   rows.forEach(f => { const k = f.d.slice(0,7);
     if (k !== cur){ cur = k; const all = rows.filter(x=>x.d.startsWith(k)), ms = all.filter(x => !x.mep), nm = all.length - ms.length; const t = ms.reduce((a,x)=>a+x.m,0), n = ms.reduce((a,x)=>a+x.n,0);
-      h += `<tr class="mhead"><td colspan="9">${MOIS_L[+k.slice(5)-1]} ${k.slice(0,4)}<span class="num">${ms.length} étapes · ${hm(t)} · nuit ${hm(n)}${nm ? ` · ${nm} MEP` : ""}</span></td></tr>`; }
+      h += `<tr class="mhead"><td colspan="${HAS_CDB ? 9 : 8}">${MOIS_L[+k.slice(5)-1]} ${k.slice(0,4)}<span class="num">${ms.length} étapes · ${hm(t)} · nuit ${hm(n)}${nm ? ` · ${nm} MEP` : ""}</span></td></tr>`; }
     if (f.mep) { h += `<tr class="mep"><td class="mono">${fdate(f.d)}</td><td class="mono"><span class="pill">MEP</span> ${esc(f.v) || ""}</td><td><span class="route">${f.o}<i>→</i>${f.a}</span></td>
       <td class="mono">${f.h1}–${f.h2}</td><td class="r mono">(${hm(f.m || 0)})</td><td class="r mono">—</td>
-      <td class="mono">${f.mode && f.mode !== "Avion" ? esc(f.mode.toLowerCase()) : "—"}</td><td class="mono">—</td><td>—</td></tr>`; return; }
+      <td class="mono">${f.mode && f.mode !== "Avion" ? esc(f.mode.toLowerCase()) : "—"}</td><td class="mono">—</td>${HAS_CDB ? "<td>—</td>" : ""}</tr>`; return; }
     h += `<tr><td class="mono">${fdate(f.d)}</td><td class="mono">${f.v}</td><td><span class="route">${f.o}<i>→</i>${f.a}</span></td>
       <td class="mono muted">${f.h1}–${f.h2}</td><td class="r mono">${f.pg?'<span class="pill warn" title="Heures programmées, en attente des heures réelles">prog.</span> ':""}${hm(f.m)}</td>
       <td class="r mono">${f.n ? hm(f.n) : '<span class="muted">—</span>'}${f.ln ? ' <span class="pill n" title="Arrivée de nuit">ATT N</span>' : ''}</td>
-      <td class="mono">${f.ty || '<span class="muted">—</span>'}</td><td class="mono">${f.im ? esc(f.im) : '<span class="muted">—</span>'}</td><td>${esc(f.c) || '<span class="muted">—</span>'}</td></tr>`; });
+      <td class="mono">${f.ty || '<span class="muted">—</span>'}</td><td class="mono">${f.im ? esc(f.im) : '<span class="muted">—</span>'}</td>${HAS_CDB ? `<td>${esc(f.c) || '<span class="muted">—</span>'}</td>` : ""}</tr>`; });
   return h + `</tbody></table></div>`;
 }
 
@@ -1216,6 +1220,7 @@ function workbookSheets(){
   sheets.push({name: "Vols", cols: [{h:"Date", t:"date", w:11}, {h:"Vol", w:10}, {h:"Départ", w:8}, {h:"Ville de départ", w:18}, {h:"Arrivée", w:8}, {h:"Ville d'arrivée", w:18}, {h:"Bloc départ", t:"time", w:11}, {h:"Bloc arrivée", t:"time", w:12}, {h:"Durée", t:"dur", w:8}, {h:"Nuit", t:"dur", w:7}, {h:"Durée (h décimales)", t:"dec", w:10}, {h:"Atterrissage de nuit", w:10}, {h:"Distance (NM)", t:"int", w:13}, {h:"Avion", w:7}, {h:"Immat.", w:9}, {h:"CDB", w:20}, {h:"Heures", w:12}, {h:"Source", w:34}],
     rows: FL.map(f => [f.d, f.v, f.o, cityOf(f.o), f.a, cityOf(f.a), f.h1, f.h2, f.m, f.n, Math.round(f.m / 60 * 100) / 100, yes(f.ln), f.nm, f.ty || "", f.im || "", f.c || "", f.pg ? "programmées" : "réelles", f.s || ""]),
     total: [`${FL.length} étapes`, "", "", "", "", "", "", "", sumBy(FL, f => f.m), sumBy(FL, f => f.n), Math.round(sumBy(FL, f => f.m) / 60 * 100) / 100, `${FL.filter(f => f.ln).length} de nuit`, sumBy(FL, f => f.nm)]});
+  if (!HAS_CDB) { const v = sheets[sheets.length - 1], i = v.cols.findIndex(c => c.h === "CDB"); v.cols.splice(i, 1); v.rows.forEach(r => r.splice(i, 1)); }   // pas de CDB sans le planning
   // Mises en place
   if (D.meps.length) { const MP = [...D.meps].sort((a, b) => (a.d + a.h1).localeCompare(b.d + b.h1));
     sheets.push({name: "MEP", note: "Mises en place (avion ou train) : hors heures de vol, utilisées pour situer le début et la fin des rotations (impôts).",
@@ -1268,7 +1273,7 @@ function workbookSheets(){
 }
 exportBook = () => makeXlsx(workbookSheets(), {title: "Carnet de vol", author: SET.name || "Carnet de vol"});
 
-$("#foot").innerHTML = `<div>Dernière mise à jour : ${DB.imported ? fdate(DB.imported.slice(0,10)) : "—"}${Object.keys(DB.releves).length ? ` · relevés d'activité : ${Object.keys(DB.releves).sort().map(k => MOIS[+k.slice(5)-1] + " " + k.slice(2,4)).join(", ")}` : ""}. Pour actualiser, importe ton planning ou un nouveau relevé depuis « Importer » : les nouvelles données s'ajoutent, l'historique est conservé.</div>
+$("#foot").innerHTML = `<div>Dernière mise à jour : ${DB.imported ? fdate(DB.imported.slice(0,10)) : "—"}${Object.keys(DB.releves).length ? ` · relevés d'activité : ${Object.keys(DB.releves).sort().map(k => MOIS[+k.slice(5)-1] + " " + k.slice(2,4)).join(", ")}` : ""}. Pour actualiser, importe chaque nouveau relevé depuis « Importer » (et ton planning si tu suis le mois en cours) : les nouvelles données s'ajoutent, l'historique est conservé.</div>
 <div>Heures bloc : relevés d'activité HOP! (heures réelles) quand ils sont importés, sinon planning. « prog. » signale une étape encore en heures programmées. Nuit au sens EASA : de la fin du crépuscule civil du soir au début de l'aube civile, calculée minute par minute le long de la route orthodromique. « ATT N » = arrivée de nuit.</div>
 <div>Tout est calculé et enregistré sur ce téléphone : aucune donnée n'est envoyée. Le récap impôts est indicatif, à valider avec tes justificatifs.</div>`;
 let rt; addEventListener("resize", () => { clearTimeout(rt); rt = setTimeout(() => { renderChart(); renderMap(sel().F); }, 120); });
@@ -1282,7 +1287,7 @@ $("#closeSetup").addEventListener("click", () => showSetup(false));
 $("#setupBody").addEventListener("click", e => { const b = e.target.closest("[data-bdel]"); if (!b) return; SET.bases.splice(+b.dataset.bdel, 1); renderSetup(); });
 if (HAS_DATA) { $("#who").innerHTML = SET.name ? ` <span>·</span> ${esc(SET.name)}` : ""; main(); }
 else { document.body.classList.add("nodata"); showSetup(true);
-  $("#setup .block-head").insertAdjacentHTML("afterend", `<p class="welcome">Ton carnet de vol, construit à partir de tes <b>relevés d'activité</b> HOP! et de ton <b>planning</b> : heures bloc réelles, heures de nuit EASA, immatriculations, escales, hôtels, simulateur, jours OFF, bilan de l'année et calcul des frais en courrier pour les impôts. Rien n'est envoyé nulle part : tout reste sur ce téléphone. Commence par importer un relevé d'activité ou ton planning.</p>`); }
+  $("#setup .block-head").insertAdjacentHTML("afterend", `<p class="welcome">Ton carnet de vol, construit à partir de tes <b>relevés d'activité</b> HOP! et de ton <b>planning</b> : heures bloc réelles, heures de nuit EASA, immatriculations, escales, hôtels, simulateur, jours OFF, bilan de l'année et calcul des frais en courrier pour les impôts. Rien n'est envoyé nulle part : tout reste sur ce téléphone. Commence par importer tes relevés d'activité (PDF) : ils suffisent pour tout le carnet.</p>`); }
 showFlash();
 
 // Installation sur l'écran d'accueil : conseillée sur iPhone comme sur Android
