@@ -6,7 +6,7 @@ import { readPdfAny } from "./releve.js";
 import { makeXlsx } from "./xlsx.js";
 import { loadDb, saveDb, loadSettings, saveSettings, emptyDb, mergeCalendar, planReleve, applyReleve, backupObject, restoreBackup, lsGet, lsSet, K_DATA, lastArrivalBefore, applyHotelReleve, isTrainingTransit } from "./store.js";
 
-export const VERSION = "1.6.1";
+export const VERSION = "1.6.2";
 const $ = s => document.querySelector(s);
 const esc = s => String(s ?? "").replace(/[&<>"]/g, c => ({"&":"&amp;","<":"&lt;",">":"&gt;",'"':"&quot;"}[c]));
 const MO = ["janv.","févr.","mars","avr.","mai","juin","juil.","août","sept.","oct.","nov.","déc."];
@@ -850,9 +850,9 @@ function barRate(y, key, date){
   return t && String(t).trim() !== "" ? {v:toNum(t), src:"saisi"} : {v:null, src:"?"};
 }
 function fiscCourrier(y){
-  const o = FISC.opt, all = buildRotations(true);
+  const all = buildRotations(true);
   const rows = [];
-  all.filter(r => (o.lys || r.origin === r.base) && r.start.startsWith(y)).forEach(r => {
+  all.filter(r => r.start.startsWith(y)).forEach(r => {
     const its = rotItems(r).map(it => { const rt = barRate(y, it.key, it.d); return {...it, rate: rt.v, amt: rt.v == null ? null : it.q * rt.v}; });
     rows.push({r, its, q: its.reduce((a,x) => a + x.q, 0), amt: its.some(x => x.amt == null) ? null : its.reduce((a,x) => a + x.amt, 0)});
   });
@@ -943,7 +943,7 @@ function paneFisc(){
     <p><b>Nombre d'indemnités par rotation</b> (pays de la liste 1 a) : France et pays européens dont Allemagne, Espagne, Italie, Irlande, Croatie, Slovénie, Autriche, Danemark, Suède, Royaume-Uni) : jours d'engagement − 0,5. Un jour d'engagement est un jour civil (heure de Paris) touché par tout ou partie de la rotation. Une journée sans découcher compte 0,5 indemnité au tarif zone euro.</p>
     <p><b>Tarif</b> : celui du pays où l'on découche ; en zone euro, un tarif unique. Par convention, la fraction restante est affectée à la dernière nuit de la rotation (mémento, exemples p. 16).</p>
     <p><b>Réintégration obligatoire</b> dans le revenu (case 1AJ) : le coût réel des chambres d'hôtel payées par l'employeur et toutes les indemnités perçues (annexe de la lettre, mémento p. 15). La déduction totale va en case 1AK.</p>
-    <p><b>Base</b> : réglée dans « Mon planning ». Une rotation part de la base ; une nuit à la base ou à l'aéroport du domicile n'est pas un découcher. En cas de changement de base (base d'hiver par exemple), ajoute la date dans les réglages.</p>
+    <p><b>Base</b> : réglée dans « Mon planning ». Une rotation part de la base ou d'une autre base HOP! (mise en place pour s'y rendre et en revenir), et compte dans les deux cas ; une nuit à la base ou à l'aéroport du domicile n'est pas un découcher. En cas de changement de base (base d'hiver par exemple), ajoute la date dans les réglages.</p>
     <p>Sont exclus : réserves et astreintes, visites médicales, activités au sol et simulateur à la base. Le simulateur hors base n'est pas validé par l'administration (note n°2). Ce mémento est la version d'avril 2024 (revenus 2023) : vérifie qu'aucune règle n'a changé pour 2025.</p></div>`);
   h += `<div class="panel"><h3>Frais en courrier ${y}${barProv(y) ? ` <span class="pill warn">provisoire · barème ${barYear(y)}</span>` : ""}</h3>
     <div class="summary"><span><b>${c.tot.rots}</b> rotations</span><span><b>${c.tot.days}</b> jours d'engagement</span><span><b>${c.tot.nights}</b> découchers</span><span><b>${c.tot.jour}</b> journées sans découcher</span><span><b>${fq(c.tot.q)}</b> indemnités</span></div>`;
@@ -952,10 +952,9 @@ function paneFisc(){
     h += `<div class="tw" style="margin-top:10px"><table><thead><tr><th>Tarif</th><th class="r">Indemnités</th><th class="r">€ / jour</th><th class="r">Montant</th></tr></thead><tbody>`
       + c.by.map(b => `<tr><td>${esc(tName(b.key))}</td><td class="r mono">${fq(b.q)}</td><td class="r mono">${b.rate != null ? eur(b.rate) : finput(`data-tar="${b.key}"`, o.tar[b.key] || "", "€ / jour", "Tarif " + tName(b.key))}</td><td class="r mono">${b.rate != null ? eur(b.amt) : "—"}</td></tr>`).join("")
       + `<tr><td><b>Total</b></td><td class="r mono"><b>${fq(c.tot.q)}</b></td><td></td><td class="r mono"><b>${eur(c.tot.amt)}</b>${c.tot.missing ? " (incomplet)" : ""}</td></tr></tbody></table></div>`;
-    if (c.tot.horsN) h += `<div class="hint">Dont ${c.tot.horsN} rotation${c.tot.horsN > 1 ? "s" : ""} au départ d'un aéroport autre que la base (${eur(c.tot.horsAmt)}).</div>`;
+    if (c.tot.horsN) h += `<div class="hint">Dont ${c.tot.horsN} rotation${c.tot.horsN > 1 ? "s" : ""} au départ d'une autre base HOP! (${eur(c.tot.horsAmt)}), avec MEP aller et retour : comptée${c.tot.horsN > 1 ? "s" : ""} comme les autres.</div>`;
   }
-  h += `<div class="opts noprint">
-    <label class="opt"><input type="checkbox" data-opt="lys"${FISC.opt.lys ? " checked" : ""}> <span>Compter les rotations qui ne partent pas de la base (départ du domicile ou mise en place, à confirmer)</span></label></div></div>`;
+  h += `</div>`;
   const checks = fiscChecks(x, c);
   h += `<div class="panel"><h3>Contrôles (${checks.length})</h3>${checks.length ? `<ul class="checks">${checks.map(m => `<li>${esc(m)}</li>`).join("")}</ul>` : `<div class="muted">Aucune anomalie détectée.</div>`}</div>`;
   h += `<div class="panel"><h3>Réintégrations dans le revenu (case 1AJ)</h3><div class="tw"><table><tbody>
