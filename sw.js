@@ -1,9 +1,9 @@
 // Fonctionnement hors ligne : tous les fichiers de l'app sont gardés sur le téléphone.
 // À chaque nouvelle version publiée, changer VERSION ci-dessous : les téléphones téléchargent la nouvelle version.
-const VERSION = "carnet-1.5.4";
+const VERSION = "carnet-1.6.0";
 const FILES = [
   "./", "index.html", "app.css", "manifest.webmanifest",
-  "js/app.js", "js/polyfills.js", "js/core.js", "js/calendar.js", "js/releve.js", "js/store.js",
+  "js/app.js", "js/polyfills.js", "js/core.js", "js/calendar.js", "js/releve.js", "js/store.js", "js/xlsx.js",
   "vendor/pdf.min.js", "vendor/pdf.worker.min.js", "vendor/land.json",
   "fonts/Barlow-Regular.woff", "fonts/Barlow-Medium.woff", "fonts/Barlow-SemiBold.woff",
   "fonts/BarlowCondensed-Medium.woff", "fonts/BarlowCondensed-SemiBold.woff", "fonts/BarlowCondensed-Bold.woff",
