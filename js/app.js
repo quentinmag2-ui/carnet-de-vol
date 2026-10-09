@@ -5,7 +5,7 @@ import { parseIcs, parseShortcut, calendarRecords } from "./calendar.js";
 import { readPdfAny } from "./releve.js";
 import { loadDb, saveDb, loadSettings, saveSettings, emptyDb, mergeCalendar, planReleve, applyReleve, backupObject, restoreBackup, lsGet, lsSet, K_DATA, lastArrivalBefore, applyHotelReleve, isTrainingTransit } from "./store.js";
 
-export const VERSION = "1.4.2";
+export const VERSION = "1.5.0";
 const $ = s => document.querySelector(s);
 const esc = s => String(s ?? "").replace(/[&<>"]/g, c => ({"&":"&amp;","<":"&lt;",">":"&gt;",'"':"&quot;"}[c]));
 const MO = ["janv.","févr.","mars","avr.","mai","juin","juil.","août","sept.","oct.","nov.","déc."];
@@ -74,15 +74,20 @@ const HOWTO_ANDROID = `<details class="howto"><summary>Android : exporter son pl
 
 // ---------- panneau « Importer et réglages » ----------
 const pending = {plans: []};   // relevés lus, en attente de validation
+const firstMonth = p => !p.upd.length && !p.orphans.length;   // rien dans le carnet ce mois-là : tout s'ajoute, sans question
+const nChoices = p => (firstMonth(p) ? 0 : p.add.length) + p.orphans.length + p.hotelsGone.length;
 function releveCard(p, i){
   const r = p.rec, c = r.check, done = DB.releves[r.ym];
-  let h = `<div class="rcard"><div class="rhead"><b>Relevé ${fmonth(r.ym)}</b>${c.ok ? '<span class="pill ok">total vérifié ✓</span>' : '<span class="pill warn">total à vérifier</span>'}${done ? '<span class="pill">déjà importé : sera mis à jour</span>' : ""}</div>`;
+  const nChoix = nChoices(p);
+  // Fiche repliée : un coup d'œil suffit ; elle s'ouvre d'elle-même si la lecture est à vérifier
+  let h = `<details class="rcard"${!c.ok || r.warn.length ? " open" : ""}><summary class="rhead"><b>Relevé ${fmonth(r.ym)}</b>${c.ok ? '<span class="pill ok">total vérifié ✓</span>' : '<span class="pill warn">total à vérifier</span>'}<span class="pill">${r.flights.length} vols${(r.meps||[]).length ? ` · ${r.meps.length} MEP` : ""}</span>${nChoix ? `<span class="pill acc">${nChoix} choix</span>` : ""}${done ? '<span class="pill">mise à jour</span>' : ""}</summary>`;
   h += `<div class="summary small"><span><b>${r.flights.length}</b> vols au relevé</span><span><b>${p.upd.length}</b> déjà dans le carnet, heures réelles et immatriculations reprises</span><span><b>${r.hotels.length}</b> nuits d'hôtel</span><span><b>${r.sims.length}</b> simu</span>${(r.meps||[]).length ? `<span><b>${r.meps.length}</b> MEP</span>` : ""}${(p.mepDup||[]).length ? `<span><b>${p.mepDup.length}</b> vol${p.mepDup.length>1?"s":""} du planning en fait en MEP</span>` : ""}<span>HBB <b>${c.sum}</b> h${c.total != null ? ` / total ${c.total} h` : ""}</span></div>`;
-  if (p.add.length) h += `<div class="rsec"><div class="rt">Vols du relevé absents du carnet : à ajouter ?</div>${p.add.map((f, j) => `<label class="opt"><input type="checkbox" data-pa="${i}:${j}" checked> <span class="mono">${fdate(f.d)} ${esc(f.v)} ${f.o}→${f.a} ${f.h1}–${f.h2}${f.im ? " · " + esc(f.im) : ""}</span></label>`).join("")}<div class="hint">Décoche ceux que tu ne veux pas (vol en double commande, observation…) : ils ne seront plus jamais proposés.</div></div>`;
+  if (p.add.length && firstMonth(p)) h += `<div class="hint">${p.add.length} vols ajoutés au carnet (premier import de ce mois).</div>`;
+  else if (p.add.length) h += `<div class="rsec"><div class="rt">Vols du relevé absents du carnet : à ajouter ?</div>${p.add.map((f, j) => `<label class="opt"><input type="checkbox" data-pa="${i}:${j}" checked> <span class="mono">${fdate(f.d)} ${esc(f.v)} ${f.o}→${f.a} ${f.h1}–${f.h2}${f.im ? " · " + esc(f.im) : ""}</span></label>`).join("")}<div class="hint">Décoche ceux que tu ne veux pas (vol en double commande, observation…) : ils ne seront plus jamais proposés.</div></div>`;
   if (p.orphans.length) h += `<div class="rsec"><div class="rt">Vols du carnet absents du relevé : à retirer ?</div>${p.orphans.map((f, j) => `<label class="opt"><input type="checkbox" data-po="${i}:${j}"> <span class="mono">${fdate(f.d)} ${esc(f.v)} ${f.o}→${f.a} ${f.h1}–${f.h2}</span></label>`).join("")}<div class="hint">Souvent un vol en place passager (MEP) ou annulé. Coche pour le retirer.</div></div>`;
   if (p.hotelsGone.length) h += `<div class="rsec"><div class="rt">Hôtels du planning sans hôtel au relevé : retirés</div>${p.hotelsGone.map((x, j) => `<label class="opt"><input type="checkbox" data-ph="${i}:${j}"${c.ok ? " checked" : ""}> <span class="mono">${fdate(x.d)} ${esc(x.ap)} ${esc(x.h || "")}</span></label>`).join("")}<div class="hint">Un séjour sans hôtel compagnie au relevé n'était pas une nuit d'hôtel (nuit à la maison).${c.ok ? " Décoche pour le garder." : " Le total du relevé n'est pas vérifié : rien n'est coché par prudence."}</div></div>`;
   if (r.warn.length) h += `<div class="rsec"><div class="rt">Points de lecture à vérifier</div><ul class="checks">${r.warn.map(w => `<li>${esc(w)}</li>`).join("")}</ul></div>`;
-  return h + `</div>`;
+  return h + `</details>`;
 }
 function setupHtml(){
   const rows = SET.bases.map(([from, b], i) => `<div class="setrow"><label>${i === 0 ? "Base" : "À partir du"} ${i === 0 ? "" : `<input type="date" data-bf="${i}" value="${from}">`}</label><input class="fin ap" maxlength="3" data-bb="${i}" value="${esc(b)}" aria-label="Code de la base">${i ? `<button class="chip" type="button" data-bdel="${i}">Retirer</button>` : ""}</div>`).join("");
@@ -94,8 +99,9 @@ function setupHtml(){
     <p class="muted small">Les relevés d'activité mensuels de MyPeopleDoc (heures bloc réelles, immatriculations, hôtels, jours OFF, congés, réserves) et le relevé d'hôtels annuel (escale, nom et coût de chaque nuitée). Enregistre les PDF sur ton téléphone (app Fichiers sur iPhone, Téléchargements ou Drive sur Android), puis choisis-les ici, plusieurs à la fois si tu veux : le type de relevé est reconnu tout seul. La lecture se fait sur le téléphone.</p>
     <div class="actions"><label class="chip on filebtn">Choisir des relevés PDF<input type="file" id="relFile" accept="application/pdf,.pdf" multiple hidden></label></div>
     <div id="relMsg" class="impmsg" role="status"></div>
+    ${pending.plans.length ? `<div class="actions relbar"><button class="chip on" type="button" data-rel="apply">Tout valider (${pending.plans.length} relevé${pending.plans.length > 1 ? "s" : ""})</button><button class="chip" type="button" data-rel="cancel">Annuler</button></div><div class="hint">Les choix conseillés sont déjà cochés. Touche un relevé pour voir son détail et ses choix${pending.plans.some(nChoices) ? ` (${pending.plans.reduce((a, p) => a + nChoices(p), 0)} au total)` : ""}.</div>` : ""}
     <div id="relPlans">${pending.plans.map(releveCard).join("")}</div>
-    ${pending.plans.length ? `<div class="actions"><button class="chip on" type="button" id="relApply">Valider ${pending.plans.length > 1 ? `les ${pending.plans.length} relevés` : "le relevé"}</button><button class="chip" type="button" id="relCancel">Annuler</button></div>` : ""}
+    ${pending.plans.length > 3 ? `<div class="actions"><button class="chip on" type="button" data-rel="apply">Tout valider</button><button class="chip" type="button" data-rel="cancel">Annuler</button></div>` : ""}
     ${rel.length ? `<div class="hint">Relevés importés : ${rel.map(k => `${MO[+k.slice(5)-1]} ${k.slice(2,4)}${DB.releves[k].ok ? "" : " ⚠"}`).join(", ")}</div>` : ""}
   </div>
   <div class="panel"><h3>2. Planning (calendrier)</h3>
@@ -222,8 +228,8 @@ async function saveBackup(){
 
 function bindSetup(){
   $("#relFile").addEventListener("change", e => { const fs = [...(e.target.files || [])]; if (fs.length) readReleves(fs); });
-  const ap = $("#relApply"); if (ap) ap.addEventListener("click", applyPlans);
-  const cc = $("#relCancel"); if (cc) cc.addEventListener("click", () => { pending.plans = []; renderSetup(); });
+  document.querySelectorAll('[data-rel="apply"]').forEach(b => b.addEventListener("click", applyPlans));
+  document.querySelectorAll('[data-rel="cancel"]').forEach(b => b.addEventListener("click", () => { pending.plans = []; renderSetup(); }));
   $("#impPaste").addEventListener("click", async () => { let t = "";
     try { t = await navigator.clipboard.readText(); } catch (e) { msgTo("#impMsg")("Le téléphone a refusé l'accès au presse-papiers : colle le texte dans la zone ci-dessous (appui long → Coller).", false); return; }
     runCalendar(t); });
@@ -798,8 +804,13 @@ function rotItems(r){
   return r.nights.map((n, i) => { const c = ctryOf(n.ap), last = i === k - 1;
     return {d:n.d, ap:n.ap, c, key:tariffKey(c), q: last ? T - (k - 1) : 1, last}; });
 }
+// Barème d'une année : celui de l'année s'il est fourni, sinon le plus récent disponible (calcul provisoire).
+// Pour une nouvelle année, ajouter simplement BAREME["2026"] = {...} : il sera utilisé pour 2026 automatiquement.
+const barYear = y => BAREME[y] ? y : (Object.keys(BAREME).filter(k => k <= y).sort().pop() || Object.keys(BAREME).sort().pop());
+const barProv = y => !BAREME[y];
+const barLabel = y => barProv(y) ? `${barYear(y)}, provisoire : barème ${y} pas encore fourni` : y;
 function barRate(y, key, date){
-  const b = BAREME[y] && BAREME[y][key];
+  const by = barYear(y), b = BAREME[by] && BAREME[by][key];
   if (b !== undefined) {
     if (Array.isArray(b)) { let v = null; b.forEach(([from, val]) => { if (date >= from) v = val; }); return {v, src:"barème"}; }
     return {v:b, src:"barème"};
@@ -849,7 +860,8 @@ function fiscChecks(x, c){
   if (base.length) L.push(`${base.length} nuit(s) d'hôtel à la base ou au domicile (${[...new Set(base.map(h => h.ap))].join(", ")}) : aucune indemnité de courrier, mais à rapprocher du relevé hôtels.`);
   const sims = x.S.filter(s => s.l && s.l !== "—");
   if (sims.length) L.push(`${sims.length} séance(s) de simulateur (${[...new Set(sims.map(s => s.l))].join(", ")}) non comptées : le simulateur hors base est une interprétation non validée par l'administration (mémento, note n°2).`);
-  c.by.filter(b => b.rate == null).forEach(b => L.push(`Barème ${x.y} non fourni pour : ${tName(b.key)}. Indemnités non chiffrées.`));
+  c.by.filter(b => b.rate == null).forEach(b => L.push(`Barème ${barYear(x.y)} sans tarif pour : ${tName(b.key)}. Indemnités non chiffrées (saisis le tarif).`));
+  if (barProv(x.y)) L.push(`Barème ${x.y} pas encore fourni : montants calculés avec le barème ${barYear(x.y)}, à confirmer.`);
   return L;
 }
 function baseLabel(y){
@@ -863,7 +875,7 @@ function fiscText(x, c){
   L.push(`Détail des frais réels, revenus ${x.y} : ${SET.name || "[Nom Prénom]"}, pilote, base d'affectation ${baseLabel(x.y)}`);
   L.push(`Source : carnet de vol (planning HOP! / Crew Access, calendrier, mails), état au ${fdate(TODAY)}`, "");
   L.push("1) Frais en escale (frais en courrier)");
-  L.push("Méthode : lettre de la DLF du 15/02/1999 et annexe (indemnités journalières du Groupe 1, barème " + x.y + ").");
+  L.push("Méthode : lettre de la DLF du 15/02/1999 et annexe (indemnités journalières du Groupe 1, barème " + barLabel(x.y) + ").");
   L.push(`${c.tot.rots} rotations, ${c.tot.days} jours d'engagement, ${c.tot.nights} découchers, ${c.tot.jour} journées sans découcher.`);
   c.by.forEach(b => L.push(`- ${tName(b.key)} : ${fq(b.q)} indemnité${b.q > 1 ? "s" : ""}${b.rate != null ? ` × ${eur(b.rate)} = ${eur(b.amt)}` : " (tarif non renseigné)"}`));
   L.push(`Total frais en courrier : ${c.tot.missing ? "incomplet, " : ""}${eur(c.tot.amt)}`, "");
@@ -890,7 +902,7 @@ function paneFisc(){
   if (y === dates[0].slice(0,4)) h += `<div class="note">Le carnet commence le ${fdate(dates[0])} : ce qui précède n'y figure pas, le récap ${y} est donc incomplet.</div>`;
   if (y === TODAY.slice(0,4)) h += `<div class="note">Année en cours, arrêtée au ${fdate(TODAY)}.</div>`;
   h += `<div class="summary"><span>Base d'affectation : <b>${baseLabel(y)}</b></span></div>`;
-  if (!BAREME[y]) h += `<div class="note">Le barème ${y} des indemnités journalières n'a pas été fourni : saisis les tarifs ci-dessous pour chiffrer les frais en courrier.</div>`;
+  if (barProv(y)) h += `<div class="note">Barème ${y} des indemnités journalières pas encore fourni : calcul <b>provisoire</b> avec le barème ${barYear(y)}, qui n'est pas la version à jour. Il sera recalculé dès que le barème ${y} sera ajouté.</div>`;
   h += foldBox("fmeth", "Méthode appliquée et sources", `<div class="meth">
     <p>Option des navigants (lettre DLF du 15/02/1999) : au lieu de justifier chaque dépense en escale, on déduit des indemnités forfaitaires au barème de l'État, <b>Groupe 1</b> pour les pilotes. Cette option est <b>indivisible</b> pour l'année : aucun autre frais en escale ne peut s'y ajouter (mémento p. 15).</p>
     <p><b>Nombre d'indemnités par rotation</b> (pays de la liste 1 a) : France et pays européens dont Allemagne, Espagne, Italie, Irlande, Croatie, Slovénie, Autriche, Danemark, Suède, Royaume-Uni) : jours d'engagement − 0,5. Un jour d'engagement est un jour civil (heure de Paris) touché par tout ou partie de la rotation. Une journée sans découcher compte 0,5 indemnité au tarif zone euro.</p>
@@ -898,7 +910,7 @@ function paneFisc(){
     <p><b>Réintégration obligatoire</b> dans le revenu (case 1AJ) : le coût réel des chambres d'hôtel payées par l'employeur et toutes les indemnités perçues (annexe de la lettre, mémento p. 15). La déduction totale va en case 1AK.</p>
     <p><b>Base</b> : réglée dans « Mon planning ». Une rotation part de la base ; une nuit à la base ou à l'aéroport du domicile n'est pas un découcher. En cas de changement de base (base d'hiver par exemple), ajoute la date dans les réglages.</p>
     <p>Sont exclus : réserves et astreintes, visites médicales, activités au sol et simulateur à la base. Le simulateur hors base n'est pas validé par l'administration (note n°2). Ce mémento est la version d'avril 2024 (revenus 2023) : vérifie qu'aucune règle n'a changé pour 2025.</p></div>`);
-  h += `<div class="panel"><h3>Frais en courrier ${y}</h3>
+  h += `<div class="panel"><h3>Frais en courrier ${y}${barProv(y) ? ` <span class="pill warn">provisoire · barème ${barYear(y)}</span>` : ""}</h3>
     <div class="summary"><span><b>${c.tot.rots}</b> rotations</span><span><b>${c.tot.days}</b> jours d'engagement</span><span><b>${c.tot.nights}</b> découchers</span><span><b>${c.tot.jour}</b> journées sans découcher</span><span><b>${fq(c.tot.q)}</b> indemnités</span></div>`;
   if (!c.rows.length) h += `<div class="muted" style="margin-top:10px">Aucune rotation en ${y}.</div>`;
   else {
