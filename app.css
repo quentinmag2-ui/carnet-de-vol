@@ -260,3 +260,9 @@ select.fin{width:auto;font-size:14px;text-align:left}
 tr.mep td{color:var(--ink-3);font-style:italic}
 tr.mep .route{font-weight:400}
 tr.mep .pill{font-style:normal}
+details.rcard>summary{list-style:none;cursor:pointer;position:relative;padding-right:22px}
+details.rcard>summary::-webkit-details-marker{display:none}
+details.rcard>summary::after{content:"";position:absolute;right:4px;top:50%;width:8px;height:8px;border-right:2px solid var(--ink-3);border-bottom:2px solid var(--ink-3);transform:translateY(-70%) rotate(45deg);transition:transform .15s}
+details.rcard[open]>summary::after{transform:translateY(-30%) rotate(225deg)}
+details.rcard[open]>summary{margin-bottom:4px}
+.relbar{margin-top:4px}
