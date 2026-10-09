@@ -5,7 +5,7 @@ import { parseIcs, parseShortcut, calendarRecords } from "./calendar.js";
 import { readPdfAny } from "./releve.js";
 import { loadDb, saveDb, loadSettings, saveSettings, emptyDb, mergeCalendar, planReleve, applyReleve, backupObject, restoreBackup, lsGet, lsSet, K_DATA, lastArrivalBefore, applyHotelReleve, isTrainingTransit } from "./store.js";
 
-export const VERSION = "1.5.2";
+export const VERSION = "1.5.3";
 const $ = s => document.querySelector(s);
 const esc = s => String(s ?? "").replace(/[&<>"]/g, c => ({"&":"&amp;","<":"&lt;",">":"&gt;",'"':"&quot;"}[c]));
 const MO = ["janv.","févr.","mars","avr.","mai","juin","juil.","août","sept.","oct.","nov.","déc."];
@@ -363,47 +363,61 @@ document.addEventListener("scroll", hideTip, {passive:true});
 
 // ---------- monthly chart ----------
 function renderChart(){
-  const box = $("#chart"); const W = Math.max(300, box.clientWidth); const Hh = W < 500 ? 210 : 240;
-  const pad = {l:34, r:6, t:12, b:26};
+  // Un mois = une colonne d'au moins 46 px : s'il y a trop de mois pour l'écran, le graphique défile
+  // latéralement (l'échelle des heures reste fixe à gauche) et se cale sur la période choisie.
+  const box = $("#chart"); const W = Math.max(300, box.clientWidth); const Hh = W < 500 ? 220 : 250;
+  const AX = 34, pad = {t:12, b:34};
   const agg = monthKeys.map(k => { const fs = D.flights.filter(f => f.d.startsWith(k));
     return {k, m: fs.reduce((a,f)=>a+f.m,0), n: fs.reduce((a,f)=>a+f.n,0), c: fs.length}; });
-  const maxH = Math.max(...agg.map(a=>a.m))/60;
+  const maxH = Math.max(1, ...agg.map(a=>a.m))/60;
   const step = maxH > 60 ? 20 : 10; const top = Math.ceil(maxH/step)*step;
-  const iw = W - pad.l - pad.r, ih = Hh - pad.t - pad.b;
-  const bw = iw / agg.length; const barW = Math.min(34, bw*0.62);
+  const ih = Hh - pad.t - pad.b, avail = W - AX;
+  const bw = Math.max(46, avail / agg.length), CW = Math.round(bw * agg.length) + 6, scrolls = CW > avail + 1;
+  const barW = Math.min(30, bw*0.62);
   const y = v => pad.t + ih - (v/top)*ih;
-  let s = `<svg viewBox="0 0 ${W} ${Hh}" role="img" aria-label="Heures de vol par mois, jour et nuit">`;
-  for (let v=0; v<=top; v+=step){ s += `<line x1="${pad.l}" x2="${W-pad.r}" y1="${y(v)}" y2="${y(v)}" stroke="var(--rule${v?"-2":""})" stroke-width="1"/>`;
-    s += `<text x="${pad.l-6}" y="${y(v)+3.5}" text-anchor="end">${v}h</text>`; }
+  let ax = `<svg style="width:${AX}px;height:${Hh}px" viewBox="0 0 ${AX} ${Hh}" aria-hidden="true">`;
+  for (let v=0; v<=top; v+=step) ax += `<text x="${AX-6}" y="${y(v)+3.5}" text-anchor="end">${v}h</text>`;
+  ax += `</svg>`;
+  let s = `<svg style="width:${CW}px;height:${Hh}px" viewBox="0 0 ${CW} ${Hh}" role="img" aria-label="Heures de vol par mois, jour et nuit">`;
+  for (let v=0; v<=top; v+=step) s += `<line x1="0" x2="${CW}" y1="${y(v)}" y2="${y(v)}" stroke="var(--rule${v?"-2":""})" stroke-width="1"/>`;
   const rr = (x,y0,w,h,r) => { if (h<=0) return ""; r = Math.min(r,h,w/2);
     return `M${x},${y0+h}V${y0+r}Q${x},${y0} ${x+r},${y0}H${x+w-r}Q${x+w},${y0} ${x+w},${y0+r}V${y0+h}Z`; };
   agg.forEach((a,i) => {
-    const cx = pad.l + bw*i + bw/2, x = cx - barW/2;
+    const cx = bw*i + bw/2, x = cx - barW/2;
     const [yy,mm] = a.k.split("-");
     const active = st.y==="all" ? true : (yy===st.y && (!st.m || st.m===mm));
-    const op = active ? 1 : .28;
-    const hD = (a.m - a.n)/60/top*ih, hN = a.n/60/top*ih;
-    const yD = pad.t + ih - hD;
-    const gap = hN > 0 && hD > 0 ? 2 : 0;
-    s += `<g opacity="${op}">`;
+    const hD = (a.m - a.n)/60/top*ih, hN = a.n/60/top*ih, yD = pad.t + ih - hD, gap = hN > 0 && hD > 0 ? 2 : 0;
+    s += `<g opacity="${active ? 1 : .28}">`;
     if (hD>0) s += `<path d="${hN>0 ? `M${x},${pad.t+ih}V${yD}H${x+barW}V${pad.t+ih}Z` : rr(x,yD,barW,hD,4)}" fill="var(--day)"/>`;
-    if (hN>0) s += `<path d="${rr(x,yD-hN-gap+ (hD>0?0:0),barW,hN,4)}" fill="var(--night)"/>`;
+    if (hN>0) s += `<path d="${rr(x,yD-hN-gap,barW,hN,4)}" fill="var(--night)"/>`;
     s += `</g>`;
-    if (st.m && yy===st.y && mm===st.m) s += `<path d="M${cx-5},${pad.t+ih+4}l5,-5l5,5" fill="none" stroke="var(--accent)" stroke-width="2"/>`;
-    const showLab = W >= 560 || i % 2 === 0 || (st.m && yy===st.y && mm===st.m);
-    if (showLab) s += `<text x="${cx}" y="${Hh-8}" text-anchor="middle" ${active&&st.y!=="all"?'style="fill:var(--ink)"':""}>${MOIS[+mm-1].replace(".","")}${mm==="01"||i===0?" "+yy.slice(2):""}</text>`;
-    s += `<rect x="${pad.l+bw*i}" y="${pad.t}" width="${bw}" height="${ih}" fill="transparent" data-i="${i}" style="cursor:pointer"/>`;
+    const cur = st.m && yy===st.y && mm===st.m;
+    if (cur) s += `<path d="M${cx-5},${pad.t+ih+4}l5,-5l5,5" fill="none" stroke="var(--accent)" stroke-width="2"/>`;
+    const strong = active && st.y !== "all" ? ' style="fill:var(--ink)"' : "";
+    s += `<text x="${cx}" y="${Hh-18}" text-anchor="middle"${strong}>${MOIS[+mm-1].replace(".","")}</text>`;
+    if (mm === "01" || i === 0) s += `<text x="${cx}" y="${Hh-5}" text-anchor="middle" style="font-size:9.5px">${yy}</text>`;
+    s += `<rect x="${bw*i}" y="${pad.t}" width="${bw}" height="${ih}" fill="transparent" data-i="${i}" style="cursor:pointer"/>`;
   });
   s += `</svg>`;
-  box.innerHTML = s;
+  box.innerHTML = `<div class="chart-wrap"><div class="chart-axis">${ax}</div><div class="chart-scroll${scrolls ? " scrolls" : ""}">${s}</div></div>`;
+  const hint = box.parentElement.querySelector(".hint");
+  if (hint) hint.textContent = scrolls ? "Fais glisser le graphique pour voir les autres mois. Touche une barre pour afficher ce mois." : "Touchez une barre pour afficher ce mois.";
+  // Calage : sur le mois choisi, sur la fin de l'année choisie, sinon sur les mois les plus récents
+  const sc = box.querySelector(".chart-scroll");
+  if (scrolls) { const vis = sc.clientWidth;
+    let idx = agg.length - 1;
+    if (st.y !== "all") { const ks = agg.map(a => a.k); idx = st.m ? ks.indexOf(`${st.y}-${st.m}`) : ks.map(k => k.slice(0,4)).lastIndexOf(st.y); if (idx < 0) idx = agg.length - 1; }
+    const target = st.m ? bw*idx + bw/2 - vis/2 : bw*(idx+1) + 6 - vis;
+    sc.scrollLeft = Math.max(0, Math.min(CW - vis, target)); }
   box.querySelectorAll("rect[data-i]").forEach(r => {
     const a = agg[+r.dataset.i]; const [yy,mm] = a.k.split("-");
     const html = `<b>${MOIS_L[+mm-1]} ${yy}</b><span class="num">${hm(a.m)} bloc · ${a.c} étapes<br>jour ${hm(a.m-a.n)} · nuit ${hm(a.n)}</span>`;
-    r.addEventListener("pointerenter", e => showTip(html, e.clientX, e.clientY));
-    r.addEventListener("pointermove", e => showTip(html, e.clientX, e.clientY));
+    r.addEventListener("pointerenter", e => { if (e.pointerType === "mouse") showTip(html, e.clientX, e.clientY); });
+    r.addEventListener("pointermove", e => { if (e.pointerType === "mouse") showTip(html, e.clientX, e.clientY); });
     r.addEventListener("pointerleave", hideTip);
     r.addEventListener("click", () => { hideTip(); if (st.y===yy && st.m===mm) st.m = null; else { st.y = yy; st.m = mm; } update(); });
   });
+  sc.addEventListener("scroll", hideTip, {passive: true});
 }
 
 // ---------- route map (azimuthal equidistant centred on the base) ----------

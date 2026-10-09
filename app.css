@@ -266,3 +266,9 @@ details.rcard>summary::after{content:"";position:absolute;right:4px;top:50%;widt
 details.rcard[open]>summary::after{transform:translateY(-30%) rotate(225deg)}
 details.rcard[open]>summary{margin-bottom:4px}
 .relbar{margin-top:4px}
+.chart-wrap{display:flex;align-items:stretch}
+.chart-axis{flex:none}
+.chart-scroll{flex:1;min-width:0;overflow-x:auto;overflow-y:hidden;scrollbar-width:none;-webkit-overflow-scrolling:touch;overscroll-behavior-x:contain}
+.chart-scroll::-webkit-scrollbar{display:none}
+.chart-scroll.scrolls{-webkit-mask-image:linear-gradient(to right,transparent,#000 14px,#000 calc(100% - 14px),transparent);mask-image:linear-gradient(to right,transparent,#000 14px,#000 calc(100% - 14px),transparent)}
+.chart .chart-wrap svg{display:block;max-width:none}
