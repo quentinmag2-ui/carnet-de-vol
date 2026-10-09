@@ -5,7 +5,7 @@ import { parseIcs, parseShortcut, calendarRecords } from "./calendar.js";
 import { readPdfAny } from "./releve.js";
 import { loadDb, saveDb, loadSettings, saveSettings, emptyDb, mergeCalendar, planReleve, applyReleve, backupObject, restoreBackup, lsGet, lsSet, K_DATA, lastArrivalBefore, applyHotelReleve, isTrainingTransit } from "./store.js";
 
-export const VERSION = "1.5.3";
+export const VERSION = "1.5.4";
 const $ = s => document.querySelector(s);
 const esc = s => String(s ?? "").replace(/[&<>"]/g, c => ({"&":"&amp;","<":"&lt;",">":"&gt;",'"':"&quot;"}[c]));
 const MO = ["janv.","févr.","mars","avr.","mai","juin","juil.","août","sept.","oct.","nov.","déc."];
@@ -363,7 +363,7 @@ document.addEventListener("scroll", hideTip, {passive:true});
 
 // ---------- monthly chart ----------
 function renderChart(){
-  // Un mois = une colonne d'au moins 46 px : s'il y a trop de mois pour l'écran, le graphique défile
+  // Une année glissante (12 mois) tient à l'écran ; au-delà, le graphique défile
   // latéralement (l'échelle des heures reste fixe à gauche) et se cale sur la période choisie.
   const box = $("#chart"); const W = Math.max(300, box.clientWidth); const Hh = W < 500 ? 220 : 250;
   const AX = 34, pad = {t:12, b:34};
@@ -372,7 +372,9 @@ function renderChart(){
   const maxH = Math.max(1, ...agg.map(a=>a.m))/60;
   const step = maxH > 60 ? 20 : 10; const top = Math.ceil(maxH/step)*step;
   const ih = Hh - pad.t - pad.b, avail = W - AX;
-  const bw = Math.max(46, avail / agg.length), CW = Math.round(bw * agg.length) + 6, scrolls = CW > avail + 1;
+  const bw = Math.max(avail / agg.length, Math.min(46, avail / 12)), scrolls = bw * agg.length > avail + 1;
+  const CW = scrolls ? Math.round(bw * agg.length) + 6 : Math.floor(avail);
+  const narrow = bw < 40, SHORT = ["jan","fév","mar","avr","mai","jun","jul","aoû","sep","oct","nov","déc"];
   const barW = Math.min(30, bw*0.62);
   const y = v => pad.t + ih - (v/top)*ih;
   let ax = `<svg style="width:${AX}px;height:${Hh}px" viewBox="0 0 ${AX} ${Hh}" aria-hidden="true">`;
@@ -394,8 +396,8 @@ function renderChart(){
     const cur = st.m && yy===st.y && mm===st.m;
     if (cur) s += `<path d="M${cx-5},${pad.t+ih+4}l5,-5l5,5" fill="none" stroke="var(--accent)" stroke-width="2"/>`;
     const strong = active && st.y !== "all" ? ' style="fill:var(--ink)"' : "";
-    s += `<text x="${cx}" y="${Hh-18}" text-anchor="middle"${strong}>${MOIS[+mm-1].replace(".","")}</text>`;
-    if (mm === "01" || i === 0) s += `<text x="${cx}" y="${Hh-5}" text-anchor="middle" style="font-size:9.5px">${yy}</text>`;
+    s += `<text x="${cx}" y="${Hh-18}" text-anchor="middle" style="${narrow ? "font-size:9px;" : ""}${strong ? "fill:var(--ink)" : ""}">${narrow ? SHORT[+mm-1] : MOIS[+mm-1].replace(".","")}</text>`;
+    if (mm === "01" || i === 0) s += `<text x="${cx}" y="${Hh-5}" text-anchor="middle" style="font-size:${narrow ? 8.5 : 9.5}px">${narrow ? "’" + yy.slice(2) : yy}</text>`;
     s += `<rect x="${bw*i}" y="${pad.t}" width="${bw}" height="${ih}" fill="transparent" data-i="${i}" style="cursor:pointer"/>`;
   });
   s += `</svg>`;
