@@ -86,7 +86,8 @@ function classifyBase(ev){
 
 
 // Compléments : formation Crew Access (simulateur) et événements « journée entière » (OFF, congés, réserve…).
-const simKind = label => /qualifi|\bqt\b|skill test/i.test(label) ? "Qualification de type"
+const simKind = label => /prorog/i.test(label) ? "Récurrent"   // prorogation de QT : comptée
+  : /qualifi|\bqt\b|skill test/i.test(label) ? "Qualification de type"
   : /solidair/i.test(label) ? "Autre"
   : /[ée]valuation|[ée]val\b|training|terrain|place droite|recurrent|r[ée]current|\becp\b|\bcct\b|\blpc\b|\bopc\b|\bse\d/i.test(label) ? "Récurrent" : "Autre";
 export function dayCategory(title){
@@ -98,9 +99,24 @@ export function dayCategory(title){
   if (/STAGE|\bCOURS\b|\bSOL\b|BRIEFING|CEMPN|S[ÉE]CURIT[ÉE]|FEU FUM|\bCRM\b|E-?LEARNING|VISITE M[ÉE]DICALE|ENTRETIEN/.test(t)) return "sol";
   return null;
 }
-export function classify(ev){
+// Mise en place (MEP) : vol ou trajet en passager pour la compagnie. Montrée à part, jamais comptée en heures de vol,
+// mais utile pour savoir d'où part une rotation (impôts).
+const mepMode = s => /train|tgv|sncf/i.test(s) ? "Train" : /taxi|voiture|car\b|bus|navette|road/i.test(s) ? "Voiture" : "Avion";
+export function classify(ev, tri = ""){
   const t = (ev.title || "").replace(/\s+/g, " ").trim(), notes = ev.notes || "";
   if (ev.allDay || ev.end == null || ev.end <= ev.start) { const k = dayCategory(t); return k ? {kind: "day", k} : null; }
+  // Planning HOP! : « MEP AF1234 CDG-NCE », « DH CDG-NCE », « TAXI CDG-LBG », « TRAIN LYS-CDG »
+  // (vu dans le planning réel : « MEP location voiture CDG-LBG », avec « FROM : / TO : » dans les notes)
+  let mm = t.match(/^(MEP|DHD?|TAXI|TRAIN)\b(.*?)\b([A-Z]{3})\s*[-–→]\s*([A-Z]{3})\s*$/);
+  if (mm) { const mid = mm[2] || "", fn = (mid.match(/\b([A-Z0-9]{2}\s?\d{1,4}[A-Z]?)\b/) || [])[1] || "";
+    const mode = /^TAXI/i.test(mm[1]) ? "Voiture" : /^TRAIN/i.test(mm[1]) ? "Train" : mepMode(mid);
+    return mode === "Voiture" ? null : {kind: "mep", v: fn.replace(/\s/g, ""), o: mm[3], a: mm[4], mode, src: "Planning"}; }   // MEP = avion ou train seulement
+  // Crew Access : vol dont le « Duty Type » n'est pas « Working » (Deadhead, Positioning…), ou « 🧳 Travel »
+  mm = t.match(/^(?:✈️\s*)?Flight:\s*([A-Z]{3})\s*[→\-–]\s*([A-Z]{3})/i);
+  if (mm) { const duty = (notes.match(/Duty Type:\s*([^\n]+)/i) || [])[1] || "Working";
+    if (!/work/i.test(duty)) return {kind: "mep", v: ((notes.match(/Flight Number:\s*([A-Z0-9]+)/i) || [])[1] || ""), o: mm[1].toUpperCase(), a: mm[2].toUpperCase(), mode: "Avion", src: "Crew Access"}; }
+  mm = t.match(/^(?:🧳\s*)?Travel:\s*([A-Z]{3})\s*[→\-–]\s*([A-Z]{3})/i);
+  if (mm) { const mode = mepMode(notes); return mode === "Voiture" ? null : {kind: "mep", v: "", o: mm[1].toUpperCase(), a: mm[2].toUpperCase(), mode: mode === "Avion" && /^XY|^XQ|^XR/.test(mm[1] + mm[2]) ? "Train" : mode, src: "Crew Access"}; }
   const m = t.match(/^(?:💺\s*)?Training\b/i);
   if (m) {
     const desc = ((notes.match(/Training Description:\s*([^\n]+)/i) || [])[1] || "").trim();
@@ -109,19 +125,22 @@ export function classify(ev){
   }
   const c = classifyBase(ev);
   if (c && c.kind === "sim") c.k = simKind(c.t);
+  // Vol du planning où l'on est en place passager (rôle « U » dans la liste d'équipage) : c'est une MEP
+  if (c && c.kind === "flight" && tri && new RegExp(`^\\s*${tri}\\s*:.*\\bU\\s*$`, "m").test(notes)) return {kind: "mep", v: c.v, o: c.o, a: c.a, mode: "Avion", src: c.src};
   if (!c) { const k = dayCategory(t); return k ? {kind: "day", k} : null; }
   return c;
 }
 
 // Événements → enregistrements du carnet. Les vols futurs (pas encore terminés) ne sont jamais importés.
-export function calendarRecords(events, now = Date.now()){
-  const flights = [], hotels = [], sims = [], days = {}; let ignored = 0;
+export function calendarRecords(events, now = Date.now(), tri = ""){
+  const flights = [], hotels = [], sims = [], days = {}, meps = []; let ignored = 0;
   events.forEach(ev => {
-    const c = classify(ev); if (!c) { ignored++; return; }
+    const c = classify(ev, tri); if (!c) { ignored++; return; }
     if (c.kind === "day") { const d = parisParts(ev.start).d; (days[d] ||= new Set()).add(c.k); return; }
     const s = parisParts(ev.start), e = parisParts(ev.end), m = Math.round((ev.end - ev.start) / 6e4);
     if (c.kind === "flight") { if (ev.end > now) return;
       flights.push({d: s.d, v: c.v, o: c.o, a: c.a, h1: s.h, h2: e.h, ty: c.ty, im: c.im || "", c: c.c, s: c.src, recent: now - ev.end < 24 * 3600e3}); }
+    else if (c.kind === "mep") { if (ev.end > now) return; meps.push({d: s.d, v: c.v, o: c.o, a: c.a, h1: s.h, h2: e.h, mode: c.mode, s: c.src}); }
     else if (c.kind === "hotel") hotels.push({d: s.d, s: s.h, e: e.h, de: e.d, ap: c.ap, h: c.h});
     else sims.push({d: s.d, h1: s.h, h2: e.h, t: c.t, l: c.l, k: c.k, m});
   });
@@ -131,5 +150,6 @@ export function calendarRecords(events, now = Date.now()){
   const ho = {}; hotels.forEach(h => ho[h.d + "|" + h.ap] = h);
   const si = {}; sims.forEach(x => si[x.d + "|" + x.h1 + "|" + x.t] = x);
   const dd = {}; Object.entries(days).forEach(([d, set]) => dd[d] = [...set]);
-  return {flights: Object.values(fl), hotels: Object.values(ho), sims: Object.values(si), days: dd, ignored};
+  const mp = {}; meps.forEach(x => { const k = x.d + "|" + x.h1 + "|" + x.o + "|" + x.a; mp[k] = mp[k] ? Object.assign({}, mp[k], {v: mp[k].v || x.v}) : x; });
+  return {flights: Object.values(fl), hotels: Object.values(ho), sims: Object.values(si), days: dd, meps: Object.values(mp), ignored};
 }

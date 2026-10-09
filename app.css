@@ -256,3 +256,7 @@ select.fin{width:auto;font-size:14px;text-align:left}
 @media (max-width:480px){.trow{grid-template-columns:4.2em auto minmax(0,1fr) auto;gap:4px 8px;padding:10px}}
 .banner-act{display:flex;gap:6px;flex:none}
 #installGo{background:var(--ink);color:var(--bg);border-color:var(--ink)}
+.vtools{display:flex;flex-wrap:wrap;gap:8px;align-items:center}
+tr.mep td{color:var(--ink-3);font-style:italic}
+tr.mep .route{font-weight:400}
+tr.mep .pill{font-style:normal}

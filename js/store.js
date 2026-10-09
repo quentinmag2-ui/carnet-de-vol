@@ -7,7 +7,7 @@ export const K_DATA = "carnetHop.data.v2", K_SET = "carnetHop.settings.v2";
 export const lsGet = (k, dflt) => { try { const v = JSON.parse(localStorage.getItem(k) || "null"); return v == null ? dflt : v; } catch (e) { return dflt; } };
 export const lsSet = (k, v) => { try { localStorage.setItem(k, JSON.stringify(v)); return true; } catch (e) { return false; } };
 
-export const emptyDb = () => ({flights: [], hotels: [], sims: [], trans: [], days: {}, dayCal: {}, excluded: {flights: [], hotels: []}, releves: {}, imported: null});
+export const emptyDb = () => ({flights: [], meps: [], hotels: [], sims: [], trans: [], days: {}, dayCal: {}, excluded: {flights: [], hotels: []}, releves: {}, imported: null});
 export const defaultSettings = () => ({name: "", bases: [["0000-01-01", "CDG"]], home: "", defaultType: "", seriesStart: "", simCountFrom: "", airports: {}, saved: false});
 
 export function loadDb(){ const d = Object.assign(emptyDb(), lsGet(K_DATA, {})); d.excluded = Object.assign({flights: [], hotels: []}, d.excluded || {}); return d; }
@@ -16,8 +16,22 @@ export function loadSettings(){ return Object.assign(defaultSettings(), lsGet(K_
 export function saveSettings(s){ return lsSet(K_SET, s); }
 
 const srt = (a, b) => (a.d + (a.h1 || a.s || "")).localeCompare(b.d + (b.h1 || b.s || ""));
-function sortDb(db){ ["flights", "hotels", "sims", "trans"].forEach(k => db[k].sort(srt)); }
+function sortDb(db){ db.meps ||= []; ["flights", "meps", "hotels", "sims", "trans"].forEach(k => db[k].sort(srt)); }
+// MEP : même jour, même trajet, départ à moins de 3 h → la même ; le relevé l'emporte sur le planning
+function mergeMeps(db, list, fromReleve){
+  db.meps ||= []; let n = 0;
+  (list || []).forEach(x => {
+    const ex = db.meps.find(y => y.d === x.d && y.o === x.o && y.a === x.a && Math.abs(hhmmToMin(y.h1) - hhmmToMin(x.h1)) <= 180);
+    if (ex) { if (fromReleve || !/Relevé/.test(ex.s || "")) { ex.h1 = x.h1; ex.h2 = x.h2; computeFlight(ex); }
+      ex.v ||= x.v; ex.mode = fromReleve ? x.mode : ex.mode || x.mode; ex.s = addSrc(ex.s, x.s); return; }
+    db.meps.push(computeFlight({d: x.d, v: x.v, o: x.o, a: x.a, h1: x.h1, h2: x.h2, mode: x.mode, s: x.s})); n++;
+  });
+  return n;
+}
 const addSrc = (s, x) => !s ? x : s.split(" + ").includes(x) ? s : s + " + " + x;
+// Châteauroux (terrain d'entraînement) : les vols locaux comptent, pas les vols pour y aller ou en revenir
+export const TRAINING_FIELDS = ["CHR"];
+export const isTrainingTransit = f => f.o !== f.a && (TRAINING_FIELDS.includes(f.o) || TRAINING_FIELDS.includes(f.a));
 const isExcludedFlight = (db, f) => db.excluded.flights.some(([d, v]) => d === f.d && v === f.v);
 const isExcludedHotel = (db, h) => db.excluded.hotels.some(([d, ap]) => d === h.d && ap === h.ap);
 const relevéCovers = (db, d) => !!db.releves[d.slice(0, 7)];
@@ -33,7 +47,11 @@ function findFlight(list, f){
 // ---------- import du calendrier (fichier .ics ou raccourci) ----------
 export function mergeCalendar(db, recs, settings){
   const r = {added: 0, updated: 0, hotels: 0, sims: 0, days: 0, skipped: 0};
+  r.meps = mergeMeps(db, recs.meps, false);
+  (recs.meps || []).forEach(x => { const f = db.flights.find(y => y.d === x.d && y.o === x.o && y.a === x.a && !/Relevé/.test(y.s || "") && Math.abs(hhmmToMin(y.h1) - hhmmToMin(x.h1)) <= 180);
+    if (f) db.flights.splice(db.flights.indexOf(f), 1); });
   recs.flights.forEach(f => {
+    if (isTrainingTransit(f)) { r.skipped++; return; }
     if (isExcludedFlight(db, f)) { r.skipped++; return; }
     const ex = findFlight(db.flights, f);
     if (ex) {
@@ -82,19 +100,25 @@ export function planReleve(db, rec){
   const inMonth = x => x.d.slice(0, 7) === rec.ym;
   const pool = db.flights.filter(inMonth), matched = new Set(), upd = [], add = [], known = [];
   rec.flights.forEach(f => {
+    if (isTrainingTransit(f)) { known.push(f); return; }
     const ex = findFlight(pool.filter(x => !matched.has(x)), f);
     if (ex) { matched.add(ex); upd.push([ex, f]); return; }
     if (isExcludedFlight(db, f)) { known.push(f); return; }
     add.push(f);
   });
-  const orphans = pool.filter(x => !matched.has(x));                    // vols du carnet absents du relevé
+  // vols du carnet absents du relevé ; ceux qui sont des MEP au relevé (place passager) passent dans les MEP
+  const isMepThere = x => (rec.meps || []).some(m => m.d === x.d && m.o === x.o && m.a === x.a);
+  const mepDup = pool.filter(x => !matched.has(x) && isMepThere(x));
+  const orphans = pool.filter(x => !matched.has(x) && !isMepThere(x));
   const relHot = new Set(rec.hotels.map(h => h.d));
   const hotelsGone = db.hotels.filter(h => inMonth(h) && !relHot.has(h.d) && !/Relevé/.test(h.src || ""));
-  return {rec, upd, add, orphans, hotelsGone, known};
+  return {rec, upd, add, orphans, hotelsGone, known, mepDup};
 }
 // Étape 2 : appliquer, avec les choix de l'utilisateur (vols à ajouter, vols à retirer, hôtels à retirer).
 export function applyReleve(db, plan, choice, settings){
   const {rec} = plan, r = {updated: 0, added: 0, removed: 0, hotels: 0, hotelsRemoved: 0, sims: 0};
+  r.meps = mergeMeps(db, rec.meps, true);
+  (plan.mepDup || []).forEach(f => { const i = db.flights.indexOf(f); if (i >= 0) db.flights.splice(i, 1); });
   plan.upd.forEach(([ex, f]) => {
     Object.assign(ex, {h1: f.h1, h2: f.h2, im: f.im || ex.im || "", v: ex.v || f.v, pg: 0});
     ex.ty = typeFromReg(ex.im) || ex.ty || settings.defaultType || "";
