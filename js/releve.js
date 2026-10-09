@@ -119,7 +119,7 @@ export function dayCat(act){
   if (SOL.test(a)) return "sol";
   return null;
 }
-const SIMKIND = label => /qualifi|\bqt\b/i.test(label) ? "Qualification de type" : /solidair/i.test(label) ? "Autre"
+const SIMKIND = label => /prorog/i.test(label) ? "Récurrent" : /qualifi|\bqt\b/i.test(label) ? "Qualification de type" : /solidair/i.test(label) ? "Autre"
   : /[ée]valuation|[ée]val\b|training|terrain|place droite|recurrent|r[ée]current|\becp\b|\bcct\b|\blpc\b|\bopc\b/i.test(label) ? "Récurrent" : "Autre";
 // Minutes entre 21:00 et 08:00 heure de Paris (règle de paie HOP!), seulement pour contrôler la lecture de « H Nuit »
 function payNight(d, h1, h2){
@@ -130,7 +130,7 @@ function payNight(d, h1, h2){
 
 export function releveRecords(p){
   if (!p.from) throw new Error("Période du relevé introuvable : ce PDF n'est pas un relevé d'activité HOP! ?");
-  const ym = p.from.slice(0, 7), flights = [], sims = [], days = {}, hotelDays = {}, warn = [];
+  const ym = p.from.slice(0, 7), flights = [], sims = [], days = {}, hotelDays = {}, warn = [], meps = [];
   let sumHBB = 0, dayTotals = 0;
   const lastArr = {};
   p.rows.forEach(r => {
@@ -147,6 +147,16 @@ export function releveRecords(p){
       if (f.nuitPaie != null && Math.abs(f.nuitPaie * 60 - payNight(f.d, f.h1, f.h2)) > 1.5) f.nuitDiff = true;
       flights.push(f); lastArr[r.d] = a;
       return;
+    }
+    // Mise en place : « MEP Avion », « MEP location voiture », « MEP Train »… avec un tronçon de 6 lettres
+    if (/^MEP\b/i.test(r.act) && r.h1 && r.h2) {
+      const route = r.route || ((r.act.match(/\b([A-Z]{6})\b/) || [])[1] || "");
+      if (/^[A-Z]{6}$/.test(route)) {
+        const mode = /voiture|taxi|car\b|bus/i.test(r.act) ? "Voiture" : /train/i.test(r.act) ? "Train" : "Avion";
+        if (mode !== "Voiture") meps.push({d: r.d, v: (r.act.match(/\b([A-Z]{2}\d{1,4}[A-Z]?)\b/) || [])[1] || "", o: route.slice(0, 3), a: route.slice(3), h1: r.h1, h2: r.h2, mode, s: "Relevé"});
+        lastArr[r.d] = route.slice(3);
+        return;
+      }
     }
     const k = dayCat(r.act);
     if (k) (days[r.d] ||= new Set()).add(k);
@@ -169,7 +179,7 @@ export function releveRecords(p){
     nuitDiff: flights.filter(f => f.nuitDiff).length};
   if (tot == null) warn.push("Ligne TOTAL GENERAL non trouvée : contrôle du total impossible");
   else if (!check.ok) warn.push(`Somme des journées ${check.sum} h ≠ total général ${tot} h : lecture à vérifier`);
-  return {ym, from: p.from, to: p.to, who: p.who, flights, sims, hotels, days: dd, warn, check};
+  return {ym, from: p.from, to: p.to, who: p.who, flights, sims, hotels, days: dd, meps, warn, check};
 }
 const fdm = d => `${d.slice(8)}/${d.slice(5, 7)}`;
 

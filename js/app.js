@@ -3,9 +3,9 @@ import "./polyfills.js";   // en premier : compléments pour les anciennes versi
 import { AIRPORTS, COUNTRY, parisParts, parisToMs, addDays, computeFlight, normType } from "./core.js";
 import { parseIcs, parseShortcut, calendarRecords } from "./calendar.js";
 import { readPdfAny } from "./releve.js";
-import { loadDb, saveDb, loadSettings, saveSettings, emptyDb, mergeCalendar, planReleve, applyReleve, backupObject, restoreBackup, lsGet, lsSet, K_DATA, lastArrivalBefore, applyHotelReleve } from "./store.js";
+import { loadDb, saveDb, loadSettings, saveSettings, emptyDb, mergeCalendar, planReleve, applyReleve, backupObject, restoreBackup, lsGet, lsSet, K_DATA, lastArrivalBefore, applyHotelReleve, isTrainingTransit } from "./store.js";
 
-export const VERSION = "1.3.1";
+export const VERSION = "1.4.2";
 const $ = s => document.querySelector(s);
 const esc = s => String(s ?? "").replace(/[&<>"]/g, c => ({"&":"&amp;","<":"&lt;",">":"&gt;",'"':"&quot;"}[c]));
 const MO = ["janv.","févr.","mars","avr.","mai","juin","juil.","août","sept.","oct.","nov.","déc."];
@@ -30,6 +30,11 @@ function normSims(arr){ const by = {}, out = [];
 // Comptées : séances récurrentes (évaluations, trainings…) à partir de la date réglée (fin de la qualification de type).
 // La QT et les simulateurs non certifiés (ex. Solidair) sont listés sans être comptés.
 const simCounted = s => s.k === "Récurrent" && (!SET.simCountFrom || s.d >= SET.simCountFrom);
+// Vols pour aller à Châteauroux ou en revenir : pas comptés (écartés pour de bon) ; prorogations de QT : comptées
+{ let ch = 0;
+  DB.flights.filter(isTrainingTransit).forEach(f => { DB.excluded.flights.push([f.d, f.v]); DB.flights.splice(DB.flights.indexOf(f), 1); ch++; });
+  DB.sims.forEach(s => { if (/prorog/i.test(s.t || "") && s.k !== "Récurrent") { s.k = "Récurrent"; ch++; } });
+  if (ch) saveDb(DB); }
 // Types avion : seulement E70 et E90 (les E75 / E95 venus du planning sont regroupés)
 { let ch = 0; DB.flights.forEach(f => { const t = normType(f.ty); if (t !== (f.ty || "")) { f.ty = t; ch++; } }); if (!["", "E70", "E90"].includes(SET.defaultType)) SET.defaultType = normType(SET.defaultType); if (ch) saveDb(DB); }
 // Hôtels des relevés importés avant la v1.2 sans escale : on la retrouve d'après les vols
@@ -41,7 +46,9 @@ const atBase = h => h.ap === baseOn(h.d);
 const hotelConfirmed = h => /Calendrier|Relevé hôtels/.test(h.src || "") || (!h.src && !!h.h);
 const countedHotel = h => !!h.ap && !(SET.home && h.ap === SET.home) && (!atBase(h) || hotelConfirmed(h));
 const isDecoucher = h => countedHotel(h) && !atBase(h) && h.n > 0;
-const D = {gen: `${nowParts.d} ${nowParts.h}`, flights: DB.flights, sims: normSims(DB.sims), hotels: DB.hotels.filter(countedHotel), hotelsAll: DB.hotels, trans: DB.trans,
+// MEP = avion ou train uniquement (les trajets en voiture ou taxi de la compagnie ne sont pas gardés)
+if ((DB.meps || []).some(x => x.mode === "Voiture")) { DB.meps = DB.meps.filter(x => x.mode !== "Voiture"); saveDb(DB); }
+const D = {gen: `${nowParts.d} ${nowParts.h}`, flights: DB.flights, meps: DB.meps || [], sims: normSims(DB.sims), hotels: DB.hotels.filter(countedHotel), hotelsAll: DB.hotels, trans: DB.trans,
   days: Object.assign({}, DB.dayCal, DB.days), ap: apMap()};
 const HAS_DATA = D.flights.length > 0;
 const HUB = (() => { let b = SET.bases[0][1]; SET.bases.forEach(([from, v]) => { if (nowParts.d >= from) b = v; }); return AIRPORTS[b] ? b : "CDG"; })();   // base du moment : centre de la carte
@@ -70,7 +77,7 @@ const pending = {plans: []};   // relevés lus, en attente de validation
 function releveCard(p, i){
   const r = p.rec, c = r.check, done = DB.releves[r.ym];
   let h = `<div class="rcard"><div class="rhead"><b>Relevé ${fmonth(r.ym)}</b>${c.ok ? '<span class="pill ok">total vérifié ✓</span>' : '<span class="pill warn">total à vérifier</span>'}${done ? '<span class="pill">déjà importé : sera mis à jour</span>' : ""}</div>`;
-  h += `<div class="summary small"><span><b>${r.flights.length}</b> vols au relevé</span><span><b>${p.upd.length}</b> déjà dans le carnet, heures réelles et immatriculations reprises</span><span><b>${r.hotels.length}</b> nuits d'hôtel</span><span><b>${r.sims.length}</b> simu</span><span>HBB <b>${c.sum}</b> h${c.total != null ? ` / total ${c.total} h` : ""}</span></div>`;
+  h += `<div class="summary small"><span><b>${r.flights.length}</b> vols au relevé</span><span><b>${p.upd.length}</b> déjà dans le carnet, heures réelles et immatriculations reprises</span><span><b>${r.hotels.length}</b> nuits d'hôtel</span><span><b>${r.sims.length}</b> simu</span>${(r.meps||[]).length ? `<span><b>${r.meps.length}</b> MEP</span>` : ""}${(p.mepDup||[]).length ? `<span><b>${p.mepDup.length}</b> vol${p.mepDup.length>1?"s":""} du planning en fait en MEP</span>` : ""}<span>HBB <b>${c.sum}</b> h${c.total != null ? ` / total ${c.total} h` : ""}</span></div>`;
   if (p.add.length) h += `<div class="rsec"><div class="rt">Vols du relevé absents du carnet : à ajouter ?</div>${p.add.map((f, j) => `<label class="opt"><input type="checkbox" data-pa="${i}:${j}" checked> <span class="mono">${fdate(f.d)} ${esc(f.v)} ${f.o}→${f.a} ${f.h1}–${f.h2}${f.im ? " · " + esc(f.im) : ""}</span></label>`).join("")}<div class="hint">Décoche ceux que tu ne veux pas (vol en double commande, observation…) : ils ne seront plus jamais proposés.</div></div>`;
   if (p.orphans.length) h += `<div class="rsec"><div class="rt">Vols du carnet absents du relevé : à retirer ?</div>${p.orphans.map((f, j) => `<label class="opt"><input type="checkbox" data-po="${i}:${j}"> <span class="mono">${fdate(f.d)} ${esc(f.v)} ${f.o}→${f.a} ${f.h1}–${f.h2}</span></label>`).join("")}<div class="hint">Souvent un vol en place passager (MEP) ou annulé. Coche pour le retirer.</div></div>`;
   if (p.hotelsGone.length) h += `<div class="rsec"><div class="rt">Hôtels du planning sans hôtel au relevé : retirés</div>${p.hotelsGone.map((x, j) => `<label class="opt"><input type="checkbox" data-ph="${i}:${j}"${c.ok ? " checked" : ""}> <span class="mono">${fdate(x.d)} ${esc(x.ap)} ${esc(x.h || "")}</span></label>`).join("")}<div class="hint">Un séjour sans hôtel compagnie au relevé n'était pas une nuit d'hôtel (nuit à la maison).${c.ok ? " Décoche pour le garder." : " Le total du relevé n'est pas vérifié : rien n'est coché par prudence."}</div></div>`;
@@ -136,12 +143,12 @@ function runCalendar(text){
   if (/BEGIN:VCALENDAR/.test(text)) events = parseIcs(text);
   else if (/^#EVT/m.test(text)) { const r = parseShortcut(text); events = r.events; bad = r.bad; }
   else { msg("Format non reconnu : lance d'abord le raccourci (le texte commence par #EVT) ou choisis un fichier .ics.", false); return; }
-  const recs = calendarRecords(events);
-  if (!recs.flights.length && !recs.hotels.length && !recs.sims.length && !Object.keys(recs.days).length) {
+  const recs = calendarRecords(events, Date.now(), SET.tri || "");
+  if (!recs.flights.length && !recs.hotels.length && !recs.sims.length && !recs.meps.length && !Object.keys(recs.days).length) {
     msg(`Aucun vol, hôtel ou simulateur reconnu dans ${events.length} événement(s).${bad.length ? ` ${bad.length} avaient des dates illisibles : vérifie le format ISO 8601 dans le raccourci.` : ""}`, false); return; }
   const r = mergeCalendar(DB, recs, SET);
   if (!saveDb(DB)) { msg("Impossible d'enregistrer sur ce téléphone (navigation privée ?).", false); return; }
-  reloadPage(`Planning importé : ${r.added} étapes ajoutées, ${r.updated} mises à jour, ${r.hotels} hôtels, ${r.sims} séances simu.${r.skipped ? ` ${r.skipped} vol(s) ignorés (écartés ou absents d'un relevé).` : ""}`);
+  reloadPage(`Planning importé : ${r.added} étapes ajoutées, ${r.updated} mises à jour, ${r.hotels} hôtels, ${r.sims} séances simu${r.meps ? `, ${r.meps} MEP` : ""}.${r.skipped ? ` ${r.skipped} vol(s) ignorés (écartés ou absents d'un relevé).` : ""}`);
 }
 
 // Relevés PDF : lecture avec pdf.js embarqué (chargé seulement quand on en a besoin)
@@ -183,13 +190,15 @@ async function readReleves(files){
   msgTo("#relMsg")(errs.length ? `Non lu : ${errs.join(" · ")}` : `${pending.plans.length} relevé(s) lu(s). Vérifie ci-dessous, puis valide.`, !errs.length);
 }
 function applyPlans(){
-  const tot = {updated: 0, added: 0, removed: 0, hotels: 0, hotelsRemoved: 0, sims: 0}, months = [];
+  const tot = {updated: 0, added: 0, removed: 0, hotels: 0, hotelsRemoved: 0, sims: 0, meps: 0}, months = [];
   const who = pending.plans.map(p => p.rec.who).find(Boolean);
   pending.plans.forEach((p, i) => {
     const pick = sel => { const o = {}; document.querySelectorAll(`[${sel}^="${i}:"]`).forEach(c => o[+c.getAttribute(sel).split(":")[1]] = c.checked); return o; };
     const r = applyReleve(DB, p, {add: pick("data-pa"), remove: pick("data-po"), hotels: pick("data-ph")}, SET);
     Object.keys(tot).forEach(k => tot[k] += r[k]); months.push(MO[+p.rec.ym.slice(5)-1] + " " + p.rec.ym.slice(2,4));
   });
+  // Trigramme (pour reconnaître les vols en place passager dans le planning)
+  if (who && who.tri && SET.tri !== who.tri) { SET.tri = who.tri; saveSettings(SET); }
   // Premier relevé : nom et base repris du relevé si les réglages n'ont jamais été enregistrés
   if (who && !SET.saved) {
     if (!SET.name) SET.name = who.name.split(" ").reverse().map(w => w.charAt(0) + w.slice(1).toLowerCase()).join(" ");
@@ -198,7 +207,7 @@ function applyPlans(){
   }
   pending.plans = [];
   if (!saveDb(DB)) { msgTo("#relMsg")("Impossible d'enregistrer sur ce téléphone (navigation privée ?).", false); return; }
-  reloadPage(`Relevés ${months.join(", ")} importés : ${tot.updated} étapes passées en heures réelles, ${tot.added} ajoutées${tot.removed ? `, ${tot.removed} retirées` : ""}, ${tot.hotels} nuits d'hôtel${tot.hotelsRemoved ? ` (${tot.hotelsRemoved} séjours sans hôtel retirés)` : ""}.`);
+  reloadPage(`Relevés ${months.join(", ")} importés : ${tot.updated} étapes passées en heures réelles, ${tot.added} ajoutées${tot.removed ? `, ${tot.removed} retirées` : ""}, ${tot.hotels} nuits d'hôtel${tot.hotelsRemoved ? ` (${tot.hotelsRemoved} séjours sans hôtel retirés)` : ""}${tot.meps ? `, ${tot.meps} MEP` : ""}.`);
 }
 
 async function saveBackup(){
@@ -260,7 +269,7 @@ const AP = D.ap;
 
 let st = { y: "all", m: null, tab: "vols", q: "" };
 try { const s = JSON.parse(localStorage.getItem("carnet-state")||"null"); if (s) st = Object.assign(st, s); } catch(e){}
-const save = () => { try { localStorage.setItem("carnet-state", JSON.stringify({y:st.y,m:st.m,tab:st.tab})); } catch(e){} };
+const save = () => { try { localStorage.setItem("carnet-state", JSON.stringify({y:st.y,m:st.m,tab:st.tab,mep:!!st.mep})); } catch(e){} };
 
 const inP = d => st.y === "all" ? true : (d.slice(0,4) === st.y && (!st.m || d.slice(5,7) === st.m));
 const past = d => d <= TODAY;
@@ -303,10 +312,11 @@ function sel(){
   const S = D.sims.filter(s => inP(s.d));
   const H = D.hotels.filter(h => inP(h.d));
   const T = D.trans.filter(t => inP(t.d));
-  return {F,S,H,T};
+  const M = D.meps.filter(x => inP(x.d));
+  return {F,S,H,T,M};
 }
 
-function renderHero({F,S,H,T}){
+function renderHero({F,S,H,T,M}){
   const tm = F.reduce((a,f)=>a+f.m,0), tn = F.reduce((a,f)=>a+f.n,0);
   const [h,mm] = hm(tm).split("h");
   $("#kBlock").innerHTML = `${h}<small>h${mm}</small>`;
@@ -323,7 +333,7 @@ function renderHero({F,S,H,T}){
   const nTr = T.filter(t => t.k === "Train").length, nAv = T.filter(t => /^Avion|GP/.test(t.k || "")).length, nAu = T.length - nTr - nAv;
   const nm = F.reduce((a,f)=>a+f.nm,0);
   const tiles = [
-    [fr(F.length), "étapes", `${days} jours de vol`],
+    [fr(F.length), "étapes", `${days} jours de vol${M.length ? ` · + ${M.length} MEP` : ""}`],
     [hm(tn), "de nuit", `${ln} arrivées de nuit`],
     [hm(sm), "simulateur", `${Sp.length} séance${Sp.length>1?"s":""}`],
     [fr(nm), "NM", `≈ ${fr(Math.round(nm*1.852))} km`],
@@ -436,9 +446,10 @@ function renderMap(F){
   for (let lat=30; lat<=65; lat+=5){ const pts=[]; for(let lo=-20; lo<=30; lo+=1) pts.push([lat,lo]); s += `<path d="${line(pts)}" fill="none" stroke="var(--rule-2)" stroke-width="1"/>`; }
   for (let lo=-20; lo<=30; lo+=5){ const pts=[]; for(let la=30; la<=66; la+=1) pts.push([la,lo]); s += `<path d="${line(pts)}" fill="none" stroke="var(--rule-2)" stroke-width="1"/>`; }
   // range rings
+  const ringLabels = [];   // dessinés à la fin, seulement là où ils ne gênent aucun trigramme
   [250,500,750,1000].forEach(r => { s += `<circle cx="${cdg[0]}" cy="${cdg[1]}" r="${r*sc}" fill="none" stroke="var(--rule)" stroke-width="1" stroke-dasharray="3 4"/>`;
     const a = rad(135), lx = cdg[0] + Math.cos(a)*r*sc, ly = cdg[1] + Math.sin(a)*r*sc;
-    if (lx > 20 && ly < Hh - 6) s += `<text x="${lx+4}" y="${ly-3}" style="font-size:9.5px">${r} NM</text>`; });
+    if (lx > 20 && ly < Hh - 6) ringLabels.push({x: lx + 4, y: ly - 3, t: `${r} NM`}); });
   // routes
   const pairs = {}; F.forEach(f => { const k = [f.o,f.a].sort().join("-"); pairs[k] = (pairs[k]||0)+1; });
   const pmax = Math.max(1, ...Object.values(pairs));
@@ -450,15 +461,45 @@ function renderMap(F){
   const vis = {}; F.forEach(f => { vis[f.a] = (vis[f.a]||0)+1; vis[f.o] = vis[f.o]||0; });
   const vmax = Math.max(1, ...Object.entries(vis).filter(([k])=>k!==HUB).map(([,v])=>v));
   const order = [...usedAll].sort((a,b)=>(vis[a]||0)-(vis[b]||0));
-  const labelled = new Set(Object.entries(vis).sort((a,b)=>b[1]-a[1]).slice(0, W<500?8:14).map(([k])=>k)); labelled.add(HUB);
+  // Escales : d'abord tous les points, puis le trigramme de CHAQUE escale volée sur la période,
+  // placé là où il ne chevauche ni un autre trigramme ni un point (sinon un peu plus loin, relié par un trait fin).
+  const pts = {}, dots = [];
   order.forEach(k => { const [x,y] = P(ALLP[k]); const v = vis[k];
     if (v === undefined) { s += `<circle cx="${x}" cy="${y}" r="2" fill="var(--rule)"/>`; return; }
     const r = k===HUB ? 6 : 2.6 + 4*Math.sqrt(v/vmax);
+    pts[k] = {x, y, r}; dots.push([x - r, y - r, x + r, y + r]);
     if (k === selAp) s += `<circle cx="${x}" cy="${y}" r="${(r+5).toFixed(1)}" fill="var(--accent-soft)" stroke="var(--accent)" stroke-width="2"/>`;
     s += `<circle cx="${x}" cy="${y}" r="${r.toFixed(1)}" fill="${k===HUB?"var(--ink)":"var(--surface)"}" stroke="${k===selAp?"var(--accent)":"var(--ink)"}" stroke-width="1.5"/>`;
-    if (labelled.has(k)) s += `<text x="${x+r+3}" y="${y+3.5}" style="fill:var(--ink);font-weight:500;paint-order:stroke;stroke:var(--surface);stroke-width:3px">${k}</text>`;
-    s += `<circle cx="${x}" cy="${y}" r="12" fill="transparent" data-ap="${k}" style="cursor:pointer"/>`;
   });
+  const LW = 19.5, LA = 8, LD = 2;          // largeur d'un trigramme, hauteur au-dessus / au-dessous de la ligne de base
+  const overlap = (A, B) => Math.max(0, Math.min(A[2], B[2]) - Math.max(A[0], B[0])) * Math.max(0, Math.min(A[3], B[3]) - Math.max(A[1], B[1]));
+  const placed = [], lines = [], texts = [];
+  const prio = Object.keys(pts).sort((a,b) => (b===HUB) - (a===HUB) || (vis[b]||0) - (vis[a]||0) || a.localeCompare(b));
+  prio.forEach(k => { const {x, y, r} = pts[k];
+    const cands = [];
+    [[1,0],[-1,0],[0,-1],[0,1],[1,-1],[1,1],[-1,-1],[-1,1]].forEach(([dx,dy]) => [0, 9, 18].forEach(far => {
+      const g = r + 2 + far, bx = dx > 0 ? x + g : dx < 0 ? x - g - LW : x - LW/2;
+      const by = dy < 0 ? y - g - LD : dy > 0 ? y + g + LA : y + 3.5;
+      cands.push({bx, by, far, box: [bx - 1, by - LA - 1, bx + LW + 1, by + LD + 1]}); }));
+    cands.sort((a,b) => a.far - b.far);
+    let best = null, bestScore = Infinity;
+    for (const c of cands) {
+      let sc = c.far * 0.6;
+      if (c.box[0] < 1 || c.box[2] > W - 1 || c.box[1] < 1 || c.box[3] > Hh - 1) sc += 400;
+      placed.forEach(B => sc += overlap(c.box, B) * 6);
+      dots.forEach(B => sc += overlap(c.box, B) * 3);
+      if (sc < bestScore) { bestScore = sc; best = c; }
+      if (sc === c.far * 0.6 && c.far === 0) break;      // place idéale libre : on la garde
+    }
+    placed.push(best.box);
+    if (best.far) { const cx = Math.max(best.box[0], Math.min(x, best.box[2])), cy = Math.max(best.box[1], Math.min(y, best.box[3]));
+      const d = Math.hypot(cx - x, cy - y) || 1; lines.push(`<line x1="${(x + (cx-x)/d*r).toFixed(1)}" y1="${(y + (cy-y)/d*r).toFixed(1)}" x2="${cx.toFixed(1)}" y2="${cy.toFixed(1)}" stroke="var(--ink-3)" stroke-width=".8"/>`); }
+    texts.push(`<text x="${best.bx.toFixed(1)}" y="${best.by.toFixed(1)}" data-ap="${k}" style="fill:var(--ink);font-weight:500;paint-order:stroke;stroke:var(--surface);stroke-width:3px;cursor:pointer">${k}</text>`);
+  });
+  ringLabels.forEach(l => { const bx = [l.x - 1, l.y - 8, l.x + l.t.length * 5.8 + 1, l.y + 2];
+    if (!placed.some(B => overlap(bx, B)) && !dots.some(B => overlap(bx, B))) s += `<text x="${l.x}" y="${l.y}" style="font-size:9.5px">${l.t}</text>`; });
+  s += lines.join("") + texts.join("");
+  Object.entries(pts).forEach(([k, {x, y}]) => { s += `<circle cx="${x}" cy="${y}" r="12" fill="transparent" data-ap="${k}" style="cursor:pointer"/>`; });
   s += `</g></svg>`;
   box.innerHTML = s;
   box.querySelectorAll("[data-ap]").forEach(c => { const k = c.dataset.ap; const a = AP[k];
@@ -508,6 +549,7 @@ function renderTabs(c){
   const ct = {vols:c.F.length, dest:new Set(c.F.map(f=>f.a)).size, simu:c.S.length, hotel:c.H.length, trans:c.T.length, jours:"", bilan:"", fisc:curFiscY()};
   $("#tabs").innerHTML = TABS.map(([k,l]) => `<button class="tab" role="tab" data-t="${k}" aria-selected="${st.tab===k}">${l}<span class="ct">${ct[k]}</span></button>`).join("");
 }
+$("#pane").addEventListener("click", e => { if (e.target.closest("[data-mep]")) { st.mep = !st.mep; save(); renderPane(sel()); } });
 $("#tabs").addEventListener("click", e => { const b = e.target.closest("[data-t]"); if (!b) return; st.tab = b.dataset.t; save(); renderPane(sel()); renderTabs(sel()); });
 
 const hbars = (rows, fmt=v=>v) => { const mx = Math.max(1, ...rows.map(r=>r[1]));
@@ -515,9 +557,11 @@ const hbars = (rows, fmt=v=>v) => { const mx = Math.max(1, ...rows.map(r=>r[1]))
 const group = (arr, key, val) => { const o = {}; arr.forEach(x => { const k = key(x); o[k] = (o[k]||0) + val(x); }); return Object.entries(o).sort((a,b)=>b[1]-a[1]); };
 
 const openStats = {cdb:false, reg:false};
-function paneVols({F}){
+function paneVols({F, M}){
   const q = st.q.trim().toLowerCase();
-  const rows = F.filter(f => !q || [f.v,f.o,f.a,f.c,f.ty,f.im||"",AP[f.o].c,AP[f.a].c].join(" ").toLowerCase().includes(q));
+  const match = f => !q || [f.v,f.o,f.a,f.c,f.ty,f.im||"",AP[f.o]?.c,AP[f.a]?.c, f.mep ? "mep mise en place " + (f.mode||"") : ""].join(" ").toLowerCase().includes(q);
+  const meps = st.mep ? M.map(x => Object.assign({}, x, {mep: 1})) : [];
+  const rows = F.concat(meps).filter(match).sort((a,b) => (a.d + a.h1).localeCompare(b.d + b.h1));
   const byType = group(F, f => f.ty || "Non précisé", f => f.m);
   const byCdb = group(F.filter(f=>f.c), f => f.c, f => f.m).slice(0,6);
   const regs = {}; F.filter(f => f.im).forEach(f => { const r = regs[f.im] ||= {n:0, m:0, ty:f.ty, last:""}; r.n++; r.m += f.m; if (f.d > r.last) { r.last = f.d; r.ty = f.ty || r.ty; } });
@@ -529,13 +573,17 @@ function paneVols({F}){
     <div class="panel"><h3>Par avion</h3>${hbars(byType.map(([k,v])=>[`<span class="mono">${esc(k)}</span>`,v]), hm)}</div>
     ${fold("reg", "Par immatriculation", regHtml)}
     ${fold("cdb", "CDB les plus fréquents", byCdb.length?hbars(byCdb.map(([k,v])=>[esc(k),v]), hm):'<div class="muted">—</div>')}</div>`;
-  h += `<input class="search" id="q" type="search" placeholder="Filtrer : vol, escale, CDB, E90, F-HBLA…" value="${esc(st.q)}" aria-label="Filtrer les vols">`;
+  h += `<div class="vtools"><input class="search" id="q" type="search" placeholder="Filtrer : vol, escale, CDB, E90, F-HBLA…" value="${esc(st.q)}" aria-label="Filtrer les vols">${M.length ? `<button class="chip" type="button" data-mep="1" aria-pressed="${!!st.mep}">${st.mep ? "Masquer" : "Afficher"} les MEP (${M.length})</button>` : ""}</div>`;
+  if (st.mep && M.length) h += `<div class="hint" style="margin-top:-8px">Les mises en place (MEP) sont en gris : elles ne comptent ni dans les étapes ni dans les heures, mais situent le début et la fin des rotations pour les impôts.</div>`;
   if (!rows.length) return h + `<div class="empty">Aucun vol ne correspond.</div>`;
   h += `<div class="tw"><table><thead><tr><th>Date</th><th>Vol</th><th>Route</th><th>Bloc</th><th class="r">Durée</th><th class="r">Nuit</th><th>Avion</th><th>Immat.</th><th>CDB</th></tr></thead><tbody>`;
   let cur = "";
   rows.forEach(f => { const k = f.d.slice(0,7);
-    if (k !== cur){ cur = k; const ms = rows.filter(x=>x.d.startsWith(k)); const t = ms.reduce((a,x)=>a+x.m,0), n = ms.reduce((a,x)=>a+x.n,0);
-      h += `<tr class="mhead"><td colspan="9">${MOIS_L[+k.slice(5)-1]} ${k.slice(0,4)}<span class="num">${ms.length} étapes · ${hm(t)} · nuit ${hm(n)}</span></td></tr>`; }
+    if (k !== cur){ cur = k; const all = rows.filter(x=>x.d.startsWith(k)), ms = all.filter(x => !x.mep), nm = all.length - ms.length; const t = ms.reduce((a,x)=>a+x.m,0), n = ms.reduce((a,x)=>a+x.n,0);
+      h += `<tr class="mhead"><td colspan="9">${MOIS_L[+k.slice(5)-1]} ${k.slice(0,4)}<span class="num">${ms.length} étapes · ${hm(t)} · nuit ${hm(n)}${nm ? ` · ${nm} MEP` : ""}</span></td></tr>`; }
+    if (f.mep) { h += `<tr class="mep"><td class="mono">${fdate(f.d)}</td><td class="mono"><span class="pill">MEP</span> ${esc(f.v) || ""}</td><td><span class="route">${f.o}<i>→</i>${f.a}</span></td>
+      <td class="mono">${f.h1}–${f.h2}</td><td class="r mono">(${hm(f.m || 0)})</td><td class="r mono">—</td>
+      <td class="mono">${f.mode && f.mode !== "Avion" ? esc(f.mode.toLowerCase()) : "—"}</td><td class="mono">—</td><td>—</td></tr>`; return; }
     h += `<tr><td class="mono">${fdate(f.d)}</td><td class="mono">${f.v}</td><td><span class="route">${f.o}<i>→</i>${f.a}</span></td>
       <td class="mono muted">${f.h1}–${f.h2}</td><td class="r mono">${f.pg?'<span class="pill warn" title="Heures programmées, en attente des heures réelles">prog.</span> ':""}${hm(f.m)}</td>
       <td class="r mono">${f.n ? hm(f.n) : '<span class="muted">—</span>'}${f.ln ? ' <span class="pill n" title="Arrivée de nuit">ATT N</span>' : ''}</td>
@@ -570,7 +618,7 @@ function paneSimu({S}){
   if (!S.length) return h + `<div class="empty">Aucune séance simulateur sur cette période.</div>`;
   h += `<div class="tw"><table><thead><tr><th>Date</th><th>Séance</th><th>Horaires</th><th class="r">Durée</th><th>Lieu</th><th>Catégorie</th></tr></thead><tbody>`;
   S.forEach(s => { h += `<tr><td class="mono">${fdate(s.d)}</td><td class="wrap">${esc(s.t)} ${!past(s.d)?'<span class="pill acc">à venir</span>':""}${!simCounted(s)?' <span class="pill">non compté</span>':""}</td><td class="mono muted">${s.h1}–${s.h2}</td><td class="r mono">${hm(s.m)}</td><td class="mono">${esc(s.l)}</td><td><span class="pill">${esc(s.k)}</span></td></tr>`; });
-  return h + `</tbody></table></div><div class="hint">Une séance par jour de simulateur, comptée 4 h. Seules les séances récurrentes (évaluations, trainings) entrent dans le total : la qualification de type et les simulateurs non reconnus sont listés sans être comptés.</div>`;
+  return h + `</tbody></table></div><div class="hint">Une séance par jour de simulateur, comptée 4 h. Seules les séances récurrentes (évaluations, trainings, prorogations de QT) entrent dans le total : la qualification de type et les simulateurs non reconnus sont listés sans être comptés.</div>`;
 }
 
 function paneHotel({H}){
@@ -693,14 +741,15 @@ const dayDiff = (a, b) => Math.round((new Date(b + "T12:00:00Z") - new Date(a + 
 const legDates = f => ({dd: f.d, ad: f.h2 < f.h1 ? addDays(f.d, 1) : f.d});
 
 // Rotations : une rotation se termine à l'arrivée à la base ou au domicile quand le vol suivant part un autre jour.
-function buildRotations(){
-  const legs = [...D.flights].sort((a,b) => (a.d + a.h1).localeCompare(b.d + b.h1)).map(f => ({...f, ...legDates(f)}));
+function buildRotations(withMep = false){
+  const src = withMep ? D.flights.concat(D.meps.map(x => Object.assign({}, x, {mep: 1}))) : D.flights;
+  const legs = [...src].sort((a,b) => (a.d + a.h1).localeCompare(b.d + b.h1)).map(f => ({...f, ...legDates(f)}));
   const hot = new Set(D.hotelsAll.filter(h => h.n > 0).map(h => h.d + "|" + h.ap));
   const rots = []; let cur = null;
   legs.forEach(l => {
     if (!cur) { cur = {legs:[l], warn:[]}; return; }
     const p = cur.legs[cur.legs.length-1];
-    if (isHome(p.a, p.ad) && l.dd > p.ad) {
+    if (isHome(p.a, p.ad) && (l.dd > p.ad || (l.mep && !p.mep))) {   // revenu à la base : une MEP qui suit ouvre la rotation suivante
       if (!isHome(l.o, l.dd) && l.dd === addDays(p.ad, 1) && hot.has(p.ad + "|" + l.o)) {
         cur.warn.push(`Repositionnement vers ${l.o} le ${p.ad} absent des vols : nuit à ${l.o} reconstituée d'après l'hôtel`);
         cur.legs.push(l);
@@ -716,6 +765,8 @@ function buildRotations(){
     }
   });
   if (cur) rots.push(cur);
+  // une « rotation » faite uniquement de MEP (aller au simulateur, retour d'une escale…) n'en est pas une
+  for (let i = rots.length - 1; i >= 0; i--) if (rots[i].legs.every(l => l.mep)) rots.splice(i, 1);
   const nightAp = (p, l, d) => p.a === l.o ? p.a : (hot.has(d + "|" + l.o) ? l.o : p.a);
   rots.forEach(r => {
     const a = r.legs[0], z = r.legs[r.legs.length-1];
@@ -724,10 +775,10 @@ function buildRotations(){
       for (let k = 0; k < g; k++) { const d = addDays(p.ad, k); r.nights.push({d, ap: nightAp(p, l, d)}); } }
     r.origin = a.o; r.base = baseAt(a.dd); r.horsBase = a.o !== r.base;
     if (BASE_CHANGES.some(([d]) => r.start < d && r.end >= d)) r.warn.push("Rotation à cheval sur le changement de base : vérifier le décompte");
-    if (!isHome(a.o, a.dd)) r.warn.push(`La rotation commence à ${a.o} (le vol de mise en place n'est pas dans les vols)`);
+    if (!isHome(a.o, a.dd)) r.warn.push(`La rotation commence à ${a.o} : aucune MEP enregistrée depuis la base (importe le relevé d'activité ou le planning du mois)`);
     if (r.X !== r.nights.length + 1) r.warn.push(`${r.X} jours d'engagement pour ${r.nights.length} nuit(s) : à vérifier`);
     if (r.start.slice(0,4) !== r.end.slice(0,4)) r.warn.push("Rotation à cheval sur deux années");
-    const parts = [a.o]; r.legs.forEach(l => { if (l.o !== parts[parts.length-1]) parts.push("…" + l.o); parts.push(l.a); });
+    const parts = [a.o]; r.legs.forEach(l => { if (l.o !== parts[parts.length-1].replace(/ \(MEP\)$/, "")) parts.push("…" + l.o); parts.push(l.a + (l.mep ? " (MEP)" : "")); });
     r.route = parts.join("→");
   });
   return rots;
@@ -757,7 +808,7 @@ function barRate(y, key, date){
   return t && String(t).trim() !== "" ? {v:toNum(t), src:"saisi"} : {v:null, src:"?"};
 }
 function fiscCourrier(y){
-  const o = FISC.opt, all = buildRotations();
+  const o = FISC.opt, all = buildRotations(true);
   const rows = [];
   all.filter(r => (o.lys || r.origin === r.base) && r.start.startsWith(y)).forEach(r => {
     const its = rotItems(r).map(it => { const rt = barRate(y, it.key, it.d); return {...it, rate: rt.v, amt: rt.v == null ? null : it.q * rt.v}; });
@@ -943,13 +994,17 @@ function feries(y){ if (FERIES[y]) return FERIES[y]; const e = easter(y), o = {}
   [["01-01","Jour de l'an"],["05-01","Fête du travail"],["05-08","Victoire 1945"],["07-14","Fête nationale"],["08-15","Assomption"],["11-01","Toussaint"],["11-11","Armistice"],["12-25","Noël"]].forEach(([md,n]) => o[`${y}-${md}`] = n);
   o[addDays(e,1)] = "Lundi de Pâques"; o[addDays(e,39)] = "Ascension"; o[addDays(e,50)] = "Lundi de Pentecôte";
   return FERIES[y] = o; }
+// Dernier jour suivi : fin du dernier relevé d'activité ou dernière donnée importée (vol, simu, jour du planning),
+// jamais au-delà d'aujourd'hui. Après, le planning n'est pas encore connu : ces jours ne comptent pas en OFF.
+const DAYS_END = (() => { const ds = [...Object.values(DB.releves || {}).map(r => r.to || ""), ...D.flights.map(f => legDates(f).ad), ...D.sims.map(s => s.d), ...Object.keys(D.days)].filter(Boolean).sort();
+  const last = ds.length ? ds[ds.length - 1] : TODAY; return last < TODAY ? last : TODAY; })();
 let _dayMap = null;
 function dayMap(){
   if (_dayMap) return _dayMap;
   const m = {}, rot = new Set(), sims = new Set(D.sims.filter(s => past(s.d)).map(s => s.d));
   buildRotations().forEach(r => { for (let d = r.start; d <= r.end; d = addDays(d, 1)) rot.add(d); });
   const ex = D.days || {};
-  for (let d = DAYS_START; d <= TODAY; d = addDays(d, 1)) {
+  for (let d = DAYS_START; d <= DAYS_END; d = addDays(d, 1)) {
     const ks = ex[d] || [];
     m[d] = rot.has(d) ? "vol" : (sims.has(d) || ks.includes("sol")) ? "sol" : ks.includes("res") ? "res"
       : ks.includes("arret") ? "arret" : ks.includes("cp") ? "cp" : "off";
@@ -959,7 +1014,7 @@ function dayMap(){
 const legendHtml = cats => `<div class="legend">${DCAT.filter(([k]) => cats.has(k)).map(([k,l,c]) => `<span><i style="background:${c}"></i>${l}</span>`).join("")}</div>`;
 function paneJours(){
   const M = dayMap(); const ds = Object.keys(M).filter(d => inP(d));
-  if (!ds.length) return `<div class="empty">Aucun jour suivi sur cette période (le suivi commence le ${fdate(DAYS_START)}).</div>`;
+  if (!ds.length) return `<div class="empty">Aucun jour suivi sur cette période (le suivi va du ${fdate(DAYS_START)} au ${fdate(DAYS_END)}).</div>`;
   const cnt = {}; ds.forEach(d => cnt[M[d]] = (cnt[M[d]] || 0) + 1);
   const work = ds.filter(d => WORK.has(M[d])), rest = ds.filter(d => ["off","cp"].includes(M[d]));
   const we = work.filter(d => { const w = new Date(d + "T12:00:00Z").getUTCDay(); return w === 0 || w === 6; });
@@ -986,6 +1041,7 @@ function paneJours(){
       cal += `<span class="cd${k ? "" : " out"}" style="${k ? `--c:${DCOL[k]};color:${["vol","sol","res","arret","cp"].includes(k) ? "var(--bg)" : "var(--ink)"}` : ""}" title="${fdate(d)}${k ? " · " + DLAB[k] : ""}${f ? " · " + f : ""}">${i}${f ? "<em>•</em>" : ""}</span>`; }
     h += `<div class="panel"><h3>${MOIS_L[+st.m-1]} ${st.y}</h3>${cal}</div></div>`;
   } else h += `<div class="hint">Choisis un mois en haut pour voir le calendrier jour par jour.</div>`;
+  h += `<div class="hint">Jours suivis jusqu'au ${fdate(DAYS_END)}${DAYS_END < TODAY ? " (dernière donnée importée) : les jours suivants seront comptés quand ton planning ou ton relevé les couvrira" : ""}.</div>`;
   h += `<div class="hint">Jours de vol : chaque jour d'une rotation, escales comprises. OFF, congés, réserves, arrêts et activités sol viennent des relevés d'activité (et, pour les mois sans relevé, des événements « journée entière » du planning). Tout jour sans vol, sol, réserve, arrêt ni congés est compté en OFF (y compris les jours de mise en place seuls et les jours sans événement). Week-ends travaillés : samedis et dimanches de vol, sol ou réserve.</div>`;
   return h;
 }
