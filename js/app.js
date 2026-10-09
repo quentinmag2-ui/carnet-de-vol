@@ -6,7 +6,7 @@ import { readPdfAny } from "./releve.js";
 import { makeXlsx } from "./xlsx.js";
 import { loadDb, saveDb, loadSettings, saveSettings, emptyDb, mergeCalendar, planReleve, applyReleve, backupObject, restoreBackup, lsGet, lsSet, K_DATA, lastArrivalBefore, applyHotelReleve, isTrainingTransit } from "./store.js";
 
-export const VERSION = "1.6.2";
+export const VERSION = "1.6.3";
 const $ = s => document.querySelector(s);
 const esc = s => String(s ?? "").replace(/[&<>"]/g, c => ({"&":"&amp;","<":"&lt;",">":"&gt;",'"':"&quot;"}[c]));
 const MO = ["janv.","févr.","mars","avr.","mai","juin","juil.","août","sept.","oct.","nov.","déc."];
@@ -810,7 +810,10 @@ function buildRotations(withMep = false){
     r.start = a.dd; r.end = z.ad; r.X = dayDiff(r.start, r.end) + 1; r.nights = [];
     for (let i = 1; i < r.legs.length; i++) { const p = r.legs[i-1], l = r.legs[i], g = dayDiff(p.ad, l.dd);
       for (let k = 0; k < g; k++) { const d = addDays(p.ad, k); r.nights.push({d, ap: nightAp(p, l, d)}); } }
-    r.origin = a.o; r.base = baseAt(a.dd); r.horsBase = a.o !== r.base;
+    // Une MEP vers l'autre base (Lyon) ou le domicile ouvre la rotation : elle part de là où commence le premier vol.
+    // Une MEP vers une escale (repositionnement) laisse l'origine à la base.
+    const f0 = r.legs.find(l => !l.mep) || a;
+    r.origin = isHome(f0.o, f0.dd) ? f0.o : a.o; r.base = baseAt(a.dd); r.horsBase = r.origin !== r.base;
     if (BASE_CHANGES.some(([d]) => r.start < d && r.end >= d)) r.warn.push("Rotation à cheval sur le changement de base : vérifier le décompte");
     if (!isHome(a.o, a.dd)) r.warn.push(`La rotation commence à ${a.o} : aucune MEP enregistrée depuis la base (importe le relevé d'activité ou le planning du mois)`);
     if (r.X !== r.nights.length + 1) r.warn.push(`${r.X} jours d'engagement pour ${r.nights.length} nuit(s) : à vérifier`);
@@ -861,7 +864,7 @@ function fiscCourrier(y){
   const hors = rows.filter(w => w.r.horsBase);
   const tot = {rots: rows.length, days: rows.reduce((a,w) => a + w.r.X, 0), q: rows.reduce((a,w) => a + w.q, 0), amt: rows.reduce((a,w) => a + (w.amt || 0), 0),
     missing: rows.some(w => w.amt == null), nights: rows.reduce((a,w) => a + w.r.nights.length, 0), jour: rows.filter(w => !w.r.nights.length).length,
-    horsN: hors.length, horsAmt: hors.reduce((a,w) => a + (w.amt || 0), 0)};
+    horsN: hors.length, horsAmt: hors.reduce((a,w) => a + (w.amt || 0), 0), horsBy: hors.reduce((o,w) => (o[w.r.origin] = (o[w.r.origin] || 0) + 1, o), {})};
   const awayNights = new Set(); all.forEach(r => r.nights.forEach(n => { if (!isHome(n.ap, n.d)) awayNights.add(n.d + "|" + n.ap); }));
   const bys = Object.values(by).sort((a,b) => (a.key === "EUR" ? -1 : b.key === "EUR" ? 1 : a.key.localeCompare(b.key)) || (a.rate||0) - (b.rate||0));
   return {rows, by: bys, tot, awayNights};
@@ -952,7 +955,7 @@ function paneFisc(){
     h += `<div class="tw" style="margin-top:10px"><table><thead><tr><th>Tarif</th><th class="r">Indemnités</th><th class="r">€ / jour</th><th class="r">Montant</th></tr></thead><tbody>`
       + c.by.map(b => `<tr><td>${esc(tName(b.key))}</td><td class="r mono">${fq(b.q)}</td><td class="r mono">${b.rate != null ? eur(b.rate) : finput(`data-tar="${b.key}"`, o.tar[b.key] || "", "€ / jour", "Tarif " + tName(b.key))}</td><td class="r mono">${b.rate != null ? eur(b.amt) : "—"}</td></tr>`).join("")
       + `<tr><td><b>Total</b></td><td class="r mono"><b>${fq(c.tot.q)}</b></td><td></td><td class="r mono"><b>${eur(c.tot.amt)}</b>${c.tot.missing ? " (incomplet)" : ""}</td></tr></tbody></table></div>`;
-    if (c.tot.horsN) h += `<div class="hint">Dont ${c.tot.horsN} rotation${c.tot.horsN > 1 ? "s" : ""} au départ d'une autre base HOP! (${eur(c.tot.horsAmt)}), avec MEP aller et retour : comptée${c.tot.horsN > 1 ? "s" : ""} comme les autres.</div>`;
+    if (c.tot.horsN) h += `<div class="hint">Dont ${c.tot.horsN} rotation${c.tot.horsN > 1 ? "s" : ""} au départ d'un autre aéroport que la base (${Object.entries(c.tot.horsBy).sort((a,b) => b[1] - a[1]).map(([k,n]) => `${n} de ${k}`).join(", ")}), pour ${eur(c.tot.horsAmt)} : comptée${c.tot.horsN > 1 ? "s" : ""} comme les autres, MEP aller et retour comprises.</div>`;
   }
   h += `</div>`;
   const checks = fiscChecks(x, c);
