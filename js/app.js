@@ -6,7 +6,7 @@ import { readPdfAny } from "./releve.js";
 import { makeXlsx } from "./xlsx.js";
 import { loadDb, saveDb, loadSettings, saveSettings, emptyDb, mergeCalendar, planReleve, applyReleve, backupObject, restoreBackup, lsGet, lsSet, K_DATA, lastArrivalBefore, applyHotelReleve, isTrainingTransit } from "./store.js";
 
-export const VERSION = "1.6.5";
+export const VERSION = "1.6.6";
 const $ = s => document.querySelector(s);
 const esc = s => String(s ?? "").replace(/[&<>"]/g, c => ({"&":"&amp;","<":"&lt;",">":"&gt;",'"':"&quot;"}[c]));
 const MO = ["janv.","févr.","mars","avr.","mai","juin","juil.","août","sept.","oct.","nov.","déc."];
@@ -294,7 +294,7 @@ const AP = D.ap;
 
 let st = { y: "all", m: null, tab: "vols", q: "" };
 try { const s = JSON.parse(localStorage.getItem("carnet-state")||"null"); if (s) st = Object.assign(st, s); } catch(e){}
-const save = () => { try { localStorage.setItem("carnet-state", JSON.stringify({y:st.y,m:st.m,tab:st.tab,mep:!!st.mep})); } catch(e){} };
+const save = () => { try { localStorage.setItem("carnet-state", JSON.stringify({y:st.y,m:st.m,tab:st.tab,mep:!!st.mep,base:!!st.base})); } catch(e){} };
 
 const inP = d => st.y === "all" ? true : (d.slice(0,4) === st.y && (!st.m || d.slice(5,7) === st.m));
 const past = d => d <= TODAY;
@@ -552,11 +552,14 @@ function renderMap(F){
     c.addEventListener("click", () => { hideTip(); openAp(k); });
   });
   // top destinations
-  const top = Object.entries(vis).filter(([k,v])=>k!==HUB && v>0).sort((a,b)=>b[1]-a[1] || a[0].localeCompare(b[0]));
+  // Arrivées sur la base : masquées par défaut, affichables avec le bouton (option gardée sur le téléphone)
+  const BS = new Set([HUB]), nBase = [...BS].reduce((a,k) => a + (vis[k]||0), 0);
+  const top = Object.entries(vis).filter(([k,v])=>(st.base || !BS.has(k)) && v>0).sort((a,b)=>b[1]-a[1] || a[0].localeCompare(b[0]));
   const tmax = top.length ? top[0][1] : 1;
   $("#sideTitle").textContent = top.length ? `Escales (${top.length})` : "Escales";
-  $("#topDest").innerHTML = top.length ? `<div class="hbars dest-scroll" tabindex="0" aria-label="Toutes les escales, par nombre d'arrivées">` + top.map(([k,v]) => `<div class="hb" data-ap="${k}" role="button" tabindex="0"><span class="lab"><span class="mono">${k}</span> <span class="muted">${esc(AP[k].c)}</span></span><span class="tr"><i style="width:${v/tmax*100}%"></i></span><span class="v">${v}</span></div>`).join("") + `</div>`
-    + `<div class="hint">Nombre d'arrivées sur la période, hors ${HUB}.${top.length > 8 ? " Faites défiler pour voir toutes les escales." : ""} Touchez une escale pour voir tous ses vols.</div>` : `<div class="empty">Aucun vol sur cette période.</div>`;
+  const baseBtn = nBase ? `<div class="side-tools"><button class="chip" type="button" data-showbase="1" aria-pressed="${!!st.base}">${st.base ? "Masquer" : "Afficher"} les arrivées à ${HUB} (${nBase})</button></div>` : "";
+  $("#topDest").innerHTML = baseBtn + (top.length ? `<div class="hbars dest-scroll" tabindex="0" aria-label="Toutes les escales, par nombre d'arrivées">` + top.map(([k,v]) => `<div class="hb" data-ap="${k}" role="button" tabindex="0"><span class="lab"><span class="mono">${k}</span> <span class="muted">${esc(AP[k].c)}</span></span><span class="tr"><i style="width:${v/tmax*100}%"></i></span><span class="v">${v}</span></div>`).join("") + `</div>`
+    + `<div class="hint">Nombre d'arrivées sur la période${st.base ? "" : `, hors ${HUB}`}.${top.length > 8 ? " Faites défiler pour voir toutes les escales." : ""} Touchez une escale pour voir tous ses vols.</div>` : `<div class="empty">${nBase ? "Que des arrivées à la base sur cette période." : "Aucun vol sur cette période."}</div>`);
   renderApDetail();
 }
 
@@ -581,7 +584,9 @@ function renderApDetail(){
   box.innerHTML = h; box.hidden = false; title.hidden = true; top.hidden = true;
 }
 $("#apDetail").addEventListener("click", e => { if (e.target.closest("#apBack")) closeAp(); });
-$("#topDest").addEventListener("click", e => { const r = e.target.closest("[data-ap]"); if (r) openAp(r.dataset.ap); });
+$("#topDest").addEventListener("click", e => {
+  if (e.target.closest("[data-showbase]")) { st.base = !st.base; save(); renderMap(sel().F); if (st.tab === "dest") renderPane(sel()); return; }
+  const r = e.target.closest("[data-ap]"); if (r) openAp(r.dataset.ap); });
 $("#topDest").addEventListener("keydown", e => { if (e.key !== "Enter" && e.key !== " ") return; const r = e.target.closest("[data-ap]"); if (r) { e.preventDefault(); openAp(r.dataset.ap); } });
 
 // ---------- tabs ----------
@@ -638,12 +643,12 @@ function paneDest({F,H}){
   F.forEach(f => { const s = st2[f.a] ||= {arr:0,m:0,last:"",n:0}; s.arr++; s.m += f.m; if (f.d > s.last) s.last = f.d; });
   H.forEach(h => { if (st2[h.ap]) st2[h.ap].n += h.n; });
   const rows = Object.entries(st2).sort((a,b)=>b[1].arr-a[1].arr || b[1].m-a[1].m);
-  const countries = group(F.filter(f=>f.a!==HUB), f => AP[f.a].p, () => 1);
+  const countries = group(F.filter(f=>st.base || f.a!==HUB), f => AP[f.a].p, () => 1);
   const CN = COUNTRY;
   const routes = group(F, f => [f.o,f.a].sort().join(" ⇄ "), () => 1).sort((a,b) => b[1]-a[1] || a[0].localeCompare(b[0]));
   const longest = [...F].sort((a,b)=>b.m-a.m)[0];
   let h = `<div class="summary"><span><b>${rows.length}</b> escales</span><span><b>${countries.length}</b> pays</span><span>Plus long : <b>${longest.o}→${longest.a}</b> ${hm(longest.m)}</span></div>`;
-  h += `<div class="grid3"><div class="panel"><h3>Par pays (arrivées hors ${HUB})</h3>${hbars(countries.map(([k,v])=>[esc(CN[k]||k),v]))}</div>
+  h += `<div class="grid3"><div class="panel"><h3>Par pays (arrivées${st.base ? "" : ` hors ${HUB}`})</h3>${hbars(countries.map(([k,v])=>[esc(CN[k]||k),v]))}</div>
     <div class="panel"><h3>Lignes les plus volées (${routes.length})</h3><div class="dest-scroll routes-scroll" tabindex="0" aria-label="Toutes les lignes, par nombre d'étapes">${hbars(routes.map(([k,v])=>[`<span class="mono">${k}</span>`,v]))}</div><div class="hint">Étapes dans les deux sens.${routes.length > 8 ? " Faites défiler pour tout voir." : ""}</div></div>
     <div class="panel"><h3>Découchers par escale</h3>${hbars(group(H.filter(isDecoucher), x=>x.ap, x=>x.n).slice(0,8).map(([k,v])=>[`<span class="mono">${k}</span> <span class="muted">${esc(AP[k]?.c||"")}</span>`,v]))}</div></div>`;
   h += `<div class="tw"><table><thead><tr><th>Escale</th><th>Ville</th><th>Pays</th><th class="r">Arrivées</th><th class="r">Heures (vols vers)</th><th class="r">Nuits hôtel</th><th>Dernière</th></tr></thead><tbody>`;

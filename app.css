@@ -275,3 +275,4 @@ details.rcard[open]>summary{margin-bottom:4px}
 
 /* exemples dans les champs : bien distincts d'une valeur saisie */
 .fin::placeholder{color:var(--ink-3);opacity:.55}
+.side-tools{margin:0 0 10px}
