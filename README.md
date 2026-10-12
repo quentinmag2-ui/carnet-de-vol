@@ -9,6 +9,8 @@ Carnet de vol pour les PN HOP!, à ouvrir sur iPhone ou Android et à installer 
 
 **Confidentialité** : aucune donnée n'est envoyée. Tout est calculé et enregistré dans le téléphone de chacun. Ce dépôt ne contient que le code de l'application : ne jamais y déposer de relevé, de planning ou de sauvegarde.
 
+Outil personnel, **non affilié à HOP! ni à Air France**. Fourni tel quel, sans garantie ; le récap impôts est indicatif.
+
 Hébergement : GitHub Pages (fichiers statiques, aucun serveur). Fonctionne hors ligne une fois ouverte.
 
 ## Mettre à jour l'application

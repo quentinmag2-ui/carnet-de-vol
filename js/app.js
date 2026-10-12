@@ -1280,7 +1280,8 @@ exportBook = () => makeXlsx(workbookSheets(), {title: "Carnet de vol", author: S
 
 $("#foot").innerHTML = `<div>Dernière mise à jour : ${DB.imported ? fdate(DB.imported.slice(0,10)) : "—"}${Object.keys(DB.releves).length ? ` · relevés d'activité : ${Object.keys(DB.releves).sort().map(k => MOIS[+k.slice(5)-1] + " " + k.slice(2,4)).join(", ")}` : ""}. Pour actualiser, importe chaque nouveau relevé depuis « Importer » (et ton planning si tu suis le mois en cours) : les nouvelles données s'ajoutent, l'historique est conservé.</div>
 <div>Heures bloc : relevés d'activité HOP! (heures réelles) quand ils sont importés, sinon planning. « prog. » signale une étape encore en heures programmées. Nuit au sens EASA : de la fin du crépuscule civil du soir au début de l'aube civile, calculée minute par minute le long de la route orthodromique. « ATT N » = arrivée de nuit.</div>
-<div>Tout est calculé et enregistré sur ce téléphone : aucune donnée n'est envoyée. Le récap impôts est indicatif, à valider avec tes justificatifs.</div>`;
+<div>Tout est calculé et enregistré sur ce téléphone : aucune donnée n'est envoyée. Le récap impôts est indicatif, à valider avec tes justificatifs.</div>
+<div class="disclaimer">Outil personnel, non affilié à HOP! ni à Air France. Aucune donnée collectée. Fourni tel quel, sans garantie.</div>`;
 let rt; addEventListener("resize", () => { clearTimeout(rt); rt = setTimeout(() => { renderChart(); renderMap(sel().F); }, 120); });
 update();
 loadLand();
