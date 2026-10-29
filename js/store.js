@@ -1,13 +1,13 @@
 // Données du carnet, enregistrées dans le téléphone (localStorage du navigateur ou de l'app écran d'accueil),
 // et fusion des imports. Règle d'or (docs/REGLES.md) : un import n'efface jamais rien ; il ajoute, complète
 // ou corrige. Le relevé d'activité l'emporte sur le calendrier. Les éléments écartés ne reviennent jamais.
-import { computeFlight, typeFromReg, addDays, hhmmToMin } from "./core.js";
+import { computeFlight, typeFromReg, normType, addDays, hhmmToMin } from "./core.js";
 
 export const K_DATA = "carnetHop.data.v2", K_SET = "carnetHop.settings.v2";
 export const lsGet = (k, dflt) => { try { const v = JSON.parse(localStorage.getItem(k) || "null"); return v == null ? dflt : v; } catch (e) { return dflt; } };
 export const lsSet = (k, v) => { try { localStorage.setItem(k, JSON.stringify(v)); return true; } catch (e) { return false; } };
 
-export const emptyDb = () => ({flights: [], meps: [], hotels: [], sims: [], trans: [], days: {}, dayCal: {}, excluded: {flights: [], hotels: []}, releves: {}, imported: null});
+export const emptyDb = () => ({flights: [], meps: [], hotels: [], sims: [], trans: [], days: {}, dayCal: {}, excluded: {flights: [], hotels: []}, releves: {}, carnets: {}, imported: null});
 export const defaultSettings = () => ({name: "", bases: [["0000-01-01", "CDG"]], home: "", defaultType: "", seriesStart: "", simCountFrom: "", airports: {}, saved: false});
 
 export function loadDb(){ const d = Object.assign(emptyDb(), lsGet(K_DATA, {})); d.excluded = Object.assign({flights: [], hotels: []}, d.excluded || {}); return d; }
@@ -28,6 +28,8 @@ function mergeMeps(db, list, fromReleve){
   });
   return n;
 }
+// Heures réelles : relevé d'activité ou carnet de vol HOP! (le planning ne les modifie plus)
+const OFFICIAL = /Relevé|Carnet de vol/;
 const addSrc = (s, x) => !s ? x : s.split(" + ").includes(x) ? s : s + " + " + x;
 // Châteauroux (terrain d'entraînement) : les vols locaux comptent, pas les vols pour y aller ou en revenir
 export const TRAINING_FIELDS = ["CHR"];
@@ -48,14 +50,14 @@ function findFlight(list, f){
 export function mergeCalendar(db, recs, settings){
   const r = {added: 0, updated: 0, hotels: 0, sims: 0, days: 0, skipped: 0};
   r.meps = mergeMeps(db, recs.meps, false);
-  (recs.meps || []).forEach(x => { const f = db.flights.find(y => y.d === x.d && y.o === x.o && y.a === x.a && !/Relevé/.test(y.s || "") && Math.abs(hhmmToMin(y.h1) - hhmmToMin(x.h1)) <= 180);
+  (recs.meps || []).forEach(x => { const f = db.flights.find(y => y.d === x.d && y.o === x.o && y.a === x.a && !OFFICIAL.test(y.s || "") && Math.abs(hhmmToMin(y.h1) - hhmmToMin(x.h1)) <= 180);
     if (f) db.flights.splice(db.flights.indexOf(f), 1); });
   recs.flights.forEach(f => {
     if (isTrainingTransit(f)) { r.skipped++; return; }
     if (isExcludedFlight(db, f)) { r.skipped++; return; }
     const ex = findFlight(db.flights, f);
     if (ex) {
-      const fromReleve = /Relevé/.test(ex.s || "");
+      const fromReleve = OFFICIAL.test(ex.s || "");
       if (!fromReleve && (ex.h1 !== f.h1 || ex.h2 !== f.h2)) { ex.h1 = f.h1; ex.h2 = f.h2; ex.pg = 0; computeFlight(ex); r.updated++; }
       if (!ex.v && f.v) ex.v = f.v;
       if (!ex.c && f.c) ex.c = f.c;
@@ -146,6 +148,37 @@ export function applyReleve(db, plan, choice, settings){
   // Jours du mois : le relevé fait foi
   for (let d = rec.from; d <= rec.to; d = addDays(d, 1)) { if (rec.days[d]) db.days[d] = rec.days[d]; else delete db.days[d]; delete db.dayCal[d]; }
   db.releves[rec.ym] = {from: rec.from, to: rec.to, ok: rec.check.ok, sum: rec.check.sum, total: rec.check.total, flights: rec.flights.length, at: new Date().toISOString().slice(0, 10)};
+  return r;
+}
+
+// ---------- import du carnet de vol HOP! mensuel ----------
+// Il fait foi pour le CDB, l'immatriculation, le type et les minutes de nuit de chaque étape ; il n'efface rien.
+// Une étape absente du carnet est ajoutée, sauf si le relevé d'activité du mois est déjà importé (le relevé fait foi).
+export function applyCarnet(db, rec, settings){
+  const r = {matched: 0, added: 0, cdb: 0, cdbChanged: 0, night: 0, times: 0, skipped: 0, notInReleve: []};
+  db.carnets ||= {};
+  rec.flights.forEach(f => {
+    if (isTrainingTransit(f)) { r.skipped++; return; }
+    const ex = findFlight(db.flights, f);
+    if (!ex) {
+      if (isExcludedFlight(db, f)) { r.skipped++; return; }
+      if (relevéCovers(db, f.d)) { r.notInReleve.push(f); return; }
+      db.flights.push(computeFlight({d: f.d, v: f.v, o: f.o, a: f.a, h1: f.h1, h2: f.h2, ty: f.ty || settings.defaultType || "", im: f.im || "", c: f.cdb || "", nOff: f.night, s: "Carnet de vol", pg: 0}));
+      r.added++; if (f.cdb) r.cdb++; return;
+    }
+    r.matched++;
+    // heures : celles du relevé restent ; une étape du planning passe en heures réelles
+    if (!/Relevé/.test(ex.s || "") && (ex.h1 !== f.h1 || ex.h2 !== f.h2)) { ex.h1 = f.h1; ex.h2 = f.h2; r.times++; }
+    ex.pg = 0;
+    if (f.im) ex.im = f.im;
+    ex.ty = typeFromReg(ex.im) || normType(f.ty) || ex.ty || settings.defaultType || "";
+    if (!ex.v && f.v) ex.v = f.v;
+    if (f.cdb) { if (ex.c && ex.c.toLowerCase() !== f.cdb.toLowerCase()) r.cdbChanged++; if (ex.c !== f.cdb) r.cdb++; ex.c = f.cdb; }
+    if (ex.nOff !== f.night) r.night++;
+    ex.nOff = f.night;
+    ex.s = addSrc(ex.s, "Carnet de vol"); computeFlight(ex);
+  });
+  db.carnets[rec.ym] = {from: rec.from, to: rec.to, ok: rec.check.ok, flights: rec.flights.length, at: new Date().toISOString().slice(0, 10)};
   return r;
 }
 

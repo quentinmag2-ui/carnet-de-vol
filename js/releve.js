@@ -201,10 +201,97 @@ export function parseHotelPages(pages){
   return {nights, total};
 }
 
-// Lecture d'un PDF : relevé d'activité mensuel ou relevé d'hôtels annuel (reconnu tout seul)
+// ---------- Carnet de vol HOP! (PDF mensuel) ----------
+// Une ligne par étape : « JJ TYPE IMMAT VOL DEP HH:MM ARR HH:MM » puis 8 durées (instructeur, instruction,
+// jour CDB, jour OPL, nuit CDB, nuit OPL, total, simu : « 0 » ou « 1h25 »). L'équipage est écrit à droite
+// sur deux ou trois lignes autour de l'étape, le CDB en premier (« NOM Prénom - NOM Prénom - … »).
+const durMin = t => { if (t === "0") return 0; const m = t.match(/^(\d+)h(\d\d)$/); return m ? +m[1] * 60 + +m[2] : null; };
+const isDur = t => /^(0|\d+h\d\d)$/.test(t);
+// Nom de famille : les mots en majuscules du début (« LE COUARHER Yann » → Le Couarher)
+function surname(person){
+  const t = person.trim().split(/\s+/), up = [];
+  for (const w of t) { if (/\p{Ll}/u.test(w)) break; up.push(w); }
+  return titleCase((up.length ? up : t.slice(0, 1)).join(" "));
+}
+export function isCarnetText(all){ return /##\s*Carnet Vol\s*##/i.test(all) || (/CARNET DE VOL/.test(all) && /Equipage/i.test(all) && /IMMAT/.test(all)); }
+export function parseCarnetPages(pages){
+  const all = pages.map(p => p.text).join(" ");
+  let from = null, to = null;
+  const m1 = all.match(/(\d{4}-\d\d-\d\d)\s*##\s*(\d{4}-\d\d-\d\d)/);
+  if (m1) { from = m1[1]; to = m1[2]; }
+  else { const m2 = all.match(/(\d\d)\/(\d\d)\/(\d{4})\s+au\s+(\d\d)\/(\d\d)\/(\d{4})/);
+    if (m2) { from = `${m2[3]}-${m2[2]}-${m2[1]}`; to = `${m2[6]}-${m2[5]}-${m2[4]}`; } }
+  const mn = all.match(/NOM\s*:\s*([A-ZÀ-Ÿ' \-]+?)\s+\p{Lu}\p{Ll}/u), mt = all.match(/TRIGRAMME\s*:\s*([A-Z]{3})\b/);
+  const who = {name: mn ? mn[1].trim() : "", tri: mt ? mt[1] : ""};
+  const flights = [], warn = []; let total = null;
+  pages.forEach(p => {
+    const rows = groupRows(p.words);
+    // bas de l'en-tête (ligne « Lieu Heure … CDB OPL CDB OPL ») : l'équipage commence en dessous
+    const hdr = p.words.filter(w => w.text === "OPL").reduce((m, w) => Math.max(m, w.top), -1);
+    const legs = [], crewLines = [];
+    rows.forEach(r => {
+      const t = r.map(w => w.text);
+      if (/^\d\d$/.test(t[0] || "") && /^E?\d{2,3}$/i.test(t[1] || "")) {
+        const i = t.findIndex(x => /^\d\d:\d\d$/.test(x));
+        if (i < 0) return;
+        // après l'heure d'arrivée : les 8 durées, puis (sur la même ligne) une partie de l'équipage
+        const rest = r.slice(i + 3), durs = [], crew = [];
+        rest.forEach(w => { if (durs.length < 8 && !crew.length && isDur(w.text)) durs.push(durMin(w.text)); else crew.push(w); });
+        legs.push({top: r[0].top, dd: t[0], ty: t[1], im: /^F-[A-Z0-9]{4}$/.test(t[2]) ? t[2] : "", v: t[/^F-/.test(t[2]) ? 3 : 2] || "",
+          o: t[i - 1], h1: t[i], a: t[i + 1], h2: t[i + 2], durs, crew: []});
+        if (crew.length) crewLines.push({top: r[0].top, txt: crew.map(w => w.text).join(" ")});
+        return;
+      }
+      // Synthèse : « TOTAL 0 0 0 27h06 0 3h16 30h22 0 » (même ordre de colonnes, total en 7e)
+      if (t[0] === "TOTAL") { const ds = t.slice(1).filter(isDur).map(durMin); if (ds.length >= 7) total = ds[6]; return; }
+      // ligne d'équipage seule : sous l'en-tête, tout à droite du tableau, pas le pied de page
+      if (hdr > 0 && r[0].top > hdr + 4 && r[0].x0 > 450 && !/Imprim[ée]/.test(t.join(" "))) crewLines.push({top: r[0].top, txt: t.join(" ")});
+    });
+    // chaque ligne d'équipage va à l'étape la plus proche verticalement
+    crewLines.forEach(c => { if (!legs.length) return; const l = legs.reduce((a, b) => Math.abs(b.top - c.top) < Math.abs(a.top - c.top) ? b : a);
+      if (Math.abs(l.top - c.top) < 25) l.crew.push(c); });
+    legs.forEach(l => {
+      const txt = l.crew.sort((a, b) => a.top - b.top).map(c => c.txt).reduce((s, x) => !s ? x : /\p{L}-$/u.test(s) ? s + x : s + " " + x, "");
+      const people = txt.split(/\s+-\s+/).map(s => s.trim()).filter(Boolean);
+      flights.push(Object.assign(l, {people, crewText: txt}));
+    });
+  });
+  return {from, to, who, flights, total};
+}
+export function carnetRecords(p){
+  if (!p.from) throw new Error("Période du carnet de vol introuvable");
+  const ym = p.from.slice(0, 7), y0 = +p.from.slice(0, 4), m0 = +p.from.slice(5, 7), warn = [], flights = [];
+  const me = (p.who.name || "").toUpperCase();
+  let sum = 0;
+  p.flights.forEach(l => {
+    const d = `${y0}-${String(m0).padStart(2, "0")}-${l.dd}`;
+    if (!/^[A-Z]{3}$/.test(l.o || "") || !/^[A-Z]{3}$/.test(l.a || "") || !l.h1 || !l.h2) { warn.push(`${l.dd}/${String(m0).padStart(2, "0")} ${l.v} : ligne illisible`); return; }
+    if (l.durs.length < 7 || l.durs.some(x => x == null)) { warn.push(`${fdm(d)} ${l.v} : heures de vol illisibles`); return; }
+    const [, , jc, jo, nc, no, tot] = l.durs;
+    const m = blockMinutes(d, l.h1, l.h2);
+    if (Math.abs(tot - m) > 1) warn.push(`${fdm(d)} ${l.v} : total ${tot} min ≠ horaire ${l.h1}–${l.h2}`);
+    if (Math.abs(jc + jo + nc + no - tot) > 1) warn.push(`${fdm(d)} ${l.v} : jour + nuit ≠ total`);
+    sum += tot;
+    const role = jc + nc > 0 ? "CDB" : jo + no > 0 ? "OPL" : "";
+    // CDB : premier nom de l'équipage, sauf si c'est moi (je suis alors CDB : pas de nom à enregistrer)
+    const first = l.people[0] || "", firstIsMe = me && first.toUpperCase().startsWith(me);
+    const cdb = role === "CDB" || firstIsMe ? "" : first ? surname(first) : "";
+    flights.push({d, v: l.v, o: l.o, a: l.a, h1: l.h1, h2: l.h2, im: l.im, ty: typeFromReg(l.im) || l.ty, cdb, role, night: nc + no, tot, crew: l.crewText});
+  });
+  const check = {sum, total: p.total, ok: p.total == null ? !warn.length : Math.abs(sum - p.total) <= 1};
+  if (p.total != null && !check.ok) warn.push(`Somme des étapes ${sum} min ≠ total de la synthèse ${p.total} min`);
+  return {kind: "carnet", ym, from: p.from, to: p.to, who: p.who, flights, warn, check};
+}
+
+// Lecture d'un PDF : relevé d'activité mensuel, carnet de vol mensuel ou relevé d'hôtels annuel (reconnu tout seul)
 export async function readPdfAny(pdfjs, arrayBuffer){
   const pages = await pdfToPages(pdfjs, new Uint8Array(arrayBuffer));
   const all = pages.map(p => p.text).join(" ");
+  if (isCarnetText(all)) {
+    const rec = carnetRecords(parseCarnetPages(pages));
+    if (!rec.flights.length) throw new Error("carnet de vol reconnu, mais aucune étape lue");
+    return {kind: "carnet", rec};
+  }
   // Le relevé d'hôtels a lui aussi des dates de période en en-tête : on le reconnaît d'abord à son titre
   if (/relev[ée]s? d['’ ]?h[ôo]tels/i.test(all)) {
     const hr = parseHotelPages(pages);

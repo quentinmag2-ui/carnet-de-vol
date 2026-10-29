@@ -3,6 +3,7 @@
 Carnet de vol pour les PN HOP!, à ouvrir sur iPhone ou Android et à installer sur l'écran d'accueil.
 
 - **Relevés d'activité PDF** (MyPeopleDoc) lus directement sur le téléphone : heures bloc réelles, immatriculations, hôtels, jours OFF, congés, réserves.
+- **Carnets de vol PDF** mensuels HOP! : nom du CDB, immatriculation et minutes de nuit officielles de chaque étape.
 - **Planning** importé par un raccourci iPhone ou un fichier calendrier .ics (Android) : vols pas encore sur un relevé, CDB, noms d'hôtels.
 - Onglets Vols (par avion, par immatriculation), Simu, Escales, Jours, Hôtels, Transports, Bilan, Impôts (frais en courrier).
 - Heures de nuit au sens EASA (crépuscule civil), calculées le long de la route.

@@ -121,5 +121,6 @@ export function typeFromReg(im){
 export function computeFlight(f){
   const m = blockMinutes(f.d, f.h1, f.h2);
   const x = flightCalc(f.o, f.a, parisToMs(f.d, f.h1), m);
-  return Object.assign(f, {m, n: x.n, ln: x.ln, tn: x.tn, nm: x.nm});
+  // Minutes de nuit officielles du carnet de vol HOP! (nOff) quand il a été importé, sinon le calcul
+  return Object.assign(f, {m, n: f.nOff != null ? f.nOff : x.n, ln: x.ln, tn: x.tn, nm: x.nm});
 }

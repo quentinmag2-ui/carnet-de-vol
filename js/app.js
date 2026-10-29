@@ -4,7 +4,7 @@ import { AIRPORTS, COUNTRY, parisParts, parisToMs, addDays, computeFlight, normT
 import { parseIcs, parseShortcut, calendarRecords } from "./calendar.js";
 import { readPdfAny } from "./releve.js";
 import { makeXlsx } from "./xlsx.js";
-import { loadDb, saveDb, loadSettings, saveSettings, emptyDb, mergeCalendar, planReleve, applyReleve, backupObject, restoreBackup, lsGet, lsSet, K_DATA, lastArrivalBefore, applyHotelReleve, isTrainingTransit } from "./store.js";
+import { loadDb, saveDb, loadSettings, saveSettings, emptyDb, mergeCalendar, planReleve, applyReleve, applyCarnet, backupObject, restoreBackup, lsGet, lsSet, K_DATA, lastArrivalBefore, applyHotelReleve, isTrainingTransit } from "./store.js";
 
 export const VERSION = "1.6.6";
 const $ = s => document.querySelector(s);
@@ -52,7 +52,7 @@ if ((DB.meps || []).some(x => x.mode === "Voiture")) { DB.meps = DB.meps.filter(
 const D = {gen: `${nowParts.d} ${nowParts.h}`, flights: DB.flights, meps: DB.meps || [], sims: normSims(DB.sims), hotels: DB.hotels.filter(countedHotel), hotelsAll: DB.hotels, trans: DB.trans,
   days: Object.assign({}, DB.dayCal, DB.days), ap: apMap()};
 const HAS_DATA = D.flights.length > 0;
-const HAS_CDB = D.flights.some(f => f.c);   // noms des CDB : seulement avec l'import du planning
+const HAS_CDB = D.flights.some(f => f.c);   // noms des CDB : carnets de vol HOP! ou planning
 const HUB = (() => { let b = SET.bases[0][1]; SET.bases.forEach(([from, v]) => { if (nowParts.d >= from) b = v; }); return AIRPORTS[b] ? b : "CDG"; })();   // base du moment : centre de la carte
 // Étapes enregistrées quand un de leurs aéroports était inconnu : recalculées dès qu'il figure dans la table
 { let ch = 0; DB.flights.forEach(f => { if (f.o !== f.a && !f.nm && AIRPORTS[f.o] && AIRPORTS[f.a]) { computeFlight(f); ch++; } }); if (ch) saveDb(DB); }
@@ -75,7 +75,7 @@ const HOWTO_ANDROID = `<details class="howto"><summary>Android : exporter son pl
   </ol></details>`;
 
 // ---------- panneau « Importer et réglages » ----------
-const pending = {plans: []};
+const pending = {plans: [], carnets: []};   // carnets de vol lus pendant qu'un relevé attend sa validation : appliqués après lui
 let planOpen = false;   // encadré « Planning » ouvert ou replié (gardé quand l'écran se redessine)   // relevés lus, en attente de validation
 const firstMonth = p => !p.upd.length && !p.orphans.length;   // rien dans le carnet ce mois-là : tout s'ajoute, sans question
 const nChoices = p => (firstMonth(p) ? 0 : p.add.length) + p.orphans.length + p.hotelsGone.length;
@@ -94,21 +94,21 @@ function releveCard(p, i){
 }
 function setupHtml(){
   const rows = SET.bases.map(([from, b], i) => `<div class="setrow"><label>${i === 0 ? "Base" : "À partir du"} ${i === 0 ? "" : `<input type="date" data-bf="${i}" value="${from}">`}</label><input class="fin ap" maxlength="3" data-bb="${i}" value="${esc(b)}" aria-label="Code de la base">${i ? `<button class="chip" type="button" data-bdel="${i}">Retirer</button>` : ""}</div>`).join("");
-  const rel = Object.keys(DB.releves).sort();
+  const rel = Object.keys(DB.releves).sort(), carn = Object.keys(DB.carnets || {}).sort();
   const info = DB.flights.length ? `<div class="summary small"><span><b>${DB.flights.length}</b> étapes</span><span><b>${DB.hotels.length}</b> hôtels</span><span><b>${DB.sims.length}</b> séances simu</span><span><b>${DB.trans.length}</b> trajets</span></div>` : "";
   const apText = Object.entries(SET.airports || {}).map(([k, v]) => `${k};${v[0]};${v[1]};${v[2]};${v[3]}`).join("\n");
   return `<div class="setup-grid">
-  <div class="panel"><h3>1. Relevés d'activité (PDF)</h3>
-    <p class="muted small">Les relevés d'activité mensuels de MyPeopleDoc (heures bloc réelles, immatriculations, hôtels, jours OFF, congés, réserves) et le relevé d'hôtels annuel (escale, nom et coût de chaque nuitée). Enregistre les PDF sur ton téléphone (app Fichiers sur iPhone, Téléchargements ou Drive sur Android), puis choisis-les ici, plusieurs à la fois si tu veux : le type de relevé est reconnu tout seul. La lecture se fait sur le téléphone.</p>
+  <div class="panel"><h3>1. Relevés d'activité et carnets de vol (PDF)</h3>
+    <p class="muted small">Les relevés d'activité mensuels de MyPeopleDoc (heures bloc réelles, immatriculations, hôtels, jours OFF, congés, réserves), les carnets de vol mensuels HOP! (nom du CDB, immatriculation et minutes de nuit de chaque étape) et le relevé d'hôtels annuel (escale, nom et coût de chaque nuitée). Enregistre les PDF sur ton téléphone (app Fichiers sur iPhone, Téléchargements ou Drive sur Android), puis choisis-les ici, plusieurs à la fois si tu veux : le type de relevé est reconnu tout seul. La lecture se fait sur le téléphone.</p>
     <div class="actions"><label class="chip on filebtn">Choisir des relevés PDF<input type="file" id="relFile" accept="application/pdf,.pdf" multiple hidden></label></div>
     <div id="relMsg" class="impmsg" role="status"></div>
     ${pending.plans.length ? `<div class="actions relbar"><button class="chip on" type="button" data-rel="apply">Tout valider (${pending.plans.length} relevé${pending.plans.length > 1 ? "s" : ""})</button><button class="chip" type="button" data-rel="cancel">Annuler</button></div><div class="hint">Les choix conseillés sont déjà cochés. Touche un relevé pour voir son détail et ses choix${pending.plans.some(nChoices) ? ` (${pending.plans.reduce((a, p) => a + nChoices(p), 0)} au total)` : ""}.</div>` : ""}
     <div id="relPlans">${pending.plans.map(releveCard).join("")}</div>
     ${pending.plans.length > 3 ? `<div class="actions"><button class="chip on" type="button" data-rel="apply">Tout valider</button><button class="chip" type="button" data-rel="cancel">Annuler</button></div>` : ""}
-    ${rel.length ? `<div class="hint">Relevés importés : ${rel.map(k => `${MO[+k.slice(5)-1]} ${k.slice(2,4)}${DB.releves[k].ok ? "" : " ⚠"}`).join(", ")}</div>` : ""}${info}
+    ${rel.length ? `<div class="hint">Relevés importés : ${rel.map(k => `${MO[+k.slice(5)-1]} ${k.slice(2,4)}${DB.releves[k].ok ? "" : " ⚠"}`).join(", ")}</div>` : ""}${carn.length ? `<div class="hint">Carnets de vol importés : ${carn.map(k => `${MO[+k.slice(5)-1]} ${k.slice(2,4)}${DB.carnets[k].ok ? "" : " ⚠"}`).join(", ")}</div>` : ""}${pending.carnets.length ? `<div class="hint">En attente de la validation des relevés : carnet${pending.carnets.length > 1 ? "s" : ""} de vol ${pending.carnets.map(c => `${MO[+c.ym.slice(5)-1]} ${c.ym.slice(2,4)}`).join(", ")}.</div>` : ""}${info}
   </div>
   <details class="panel fold" id="planBox"${planOpen ? " open" : ""}><summary><h3>2. Planning <span class="muted">(facultatif)</span></h3></summary>
-    <p class="small"><b>Les relevés suffisent pour le carnet.</b> Le planning sert seulement à suivre le mois en cours avant l'arrivée de son relevé (vols, jours OFF, rotations), et à ajouter les noms des CDB et des hôtels.</p>
+    <p class="small"><b>Les relevés suffisent pour le carnet.</b> Le planning sert seulement à suivre le mois en cours avant l'arrivée de son relevé (vols, jours OFF, rotations), et à ajouter les noms des hôtels et des CDB (les carnets de vol HOP! donnent aussi les CDB).</p>
     <p class="muted small">Sur iPhone, lance ton raccourci « Export carnet » puis touche « Coller le planning copié ». Sur Android, choisis un fichier calendrier (.ics) exporté de ton agenda. Un nouvel import complète et corrige, sans jamais effacer l'historique.</p>
     <div class="actions"><button class="chip on" type="button" id="impPaste">Coller le planning copié</button><label class="chip filebtn">Fichier .ics<input type="file" id="impFile" accept=".ics,text/calendar,text/plain" hidden></label></div>
     <textarea id="impText" class="ftext" rows="3" placeholder="Si le bouton « Coller » ne marche pas : appui long ici → Coller, puis « Importer le texte »"></textarea>
@@ -174,12 +174,13 @@ async function getPdfjs(){
 }
 async function readReleves(files){
   const msg = msgTo("#relMsg"); msg(`Lecture de ${files.length} fichier(s)…`, true);
-  const errs = [], hotelDone = []; let info = "";
+  const errs = [], hotelDone = [], carnetRecs = []; let info = "";
   try { await getPdfjs(); } catch (e) { msg("Le lecteur PDF n'a pas pu se charger : " + e.message, false); return; }
   for (const f of files) {
     try {
       const res = await readPdfAny(pdfjs, await f.arrayBuffer());
       if (res.kind === "hotels") { hotelDone.push(Object.assign(applyHotelReleve(DB, res), {ok: res.ok})); continue; }
+      if (res.kind === "carnet") { carnetRecs.push(res.rec); continue; }
       const rec = res.rec;
       if (!rec.flights.length && !Object.keys(rec.days).length) throw new Error("aucune ligne d'activité lue");
       pending.plans = pending.plans.filter(p => p.rec.ym !== rec.ym);
@@ -196,8 +197,20 @@ async function readReleves(files){
     const n = hotelDone.reduce((a, r) => a + r.updated + r.added, 0), add = hotelDone.reduce((a, r) => a + r.added, 0);
     const bad = hotelDone.filter(r => !r.ok);
     const txt = `Relevé d'hôtels : ${n} nuitée${n > 1 ? "s" : ""} (${n - add} confirmée${n - add > 1 ? "s" : ""}${add ? `, ${add} ajoutée${add > 1 ? "s" : ""}` : ""}), ${Object.entries(byYear).map(([y, v]) => `${v.toLocaleString("fr-FR", {maximumFractionDigits: 2})} € en ${y}`).join(", ")}${bad.length ? " — total du relevé différent de la somme des lignes : à vérifier" : " — total vérifié ✓"}.`;
-    if (!pending.plans.length && !errs.length) { reloadPage(txt); return; }
+    if (!pending.plans.length && !errs.length && !carnetRecs.length) { reloadPage(txt); return; }
     info = txt;
+  }
+  if (carnetRecs.length) {
+    // relevé d'activité en attente : le carnet passe après lui (sinon une étape serait ajoutée deux fois)
+    if (pending.plans.length) {
+      carnetRecs.forEach(c => { pending.carnets = pending.carnets.filter(x => x.ym !== c.ym); pending.carnets.push(c); });
+      info = [info, `${carnetRecs.length} carnet(s) de vol lu(s) : appliqué(s) quand tu valides les relevés.`].filter(Boolean).join(" ");
+    } else {
+      const txt = applyCarnets(carnetRecs);
+      if (!saveDb(DB)) { msgTo("#relMsg")("Impossible d'enregistrer sur ce téléphone (navigation privée ?).", false); return; }
+      if (!errs.length) { reloadPage([info, txt].filter(Boolean).join(" ")); return; }
+      info = [info, txt].filter(Boolean).join(" ");
+    }
   }
   renderSetup();
   const lus = pending.plans.length ? `${pending.plans.length} relevé(s) d'activité lu(s) : vérifie ci-dessous, puis valide.` : "";
@@ -220,8 +233,23 @@ function applyPlans(){
     saveSettings(SET);
   }
   pending.plans = [];
+  const ctxt = pending.carnets.length ? " " + applyCarnets(pending.carnets) : ""; pending.carnets = [];
   if (!saveDb(DB)) { msgTo("#relMsg")("Impossible d'enregistrer sur ce téléphone (navigation privée ?).", false); return; }
-  reloadPage(`Relevés ${months.join(", ")} importés : ${tot.updated} étapes passées en heures réelles, ${tot.added} ajoutées${tot.removed ? `, ${tot.removed} retirées` : ""}, ${tot.hotels} nuits d'hôtel${tot.hotelsRemoved ? ` (${tot.hotelsRemoved} séjours sans hôtel retirés)` : ""}${tot.meps ? `, ${tot.meps} MEP` : ""}.`);
+  reloadPage(`Relevés ${months.join(", ")} importés : ${tot.updated} étapes passées en heures réelles, ${tot.added} ajoutées${tot.removed ? `, ${tot.removed} retirées` : ""}, ${tot.hotels} nuits d'hôtel${tot.hotelsRemoved ? ` (${tot.hotelsRemoved} séjours sans hôtel retirés)` : ""}${tot.meps ? `, ${tot.meps} MEP` : ""}.${ctxt}`);
+}
+// Carnets de vol HOP! : CDB, immatriculations et minutes de nuit officielles, appliqués tout de suite (rien n'est retiré)
+function applyCarnets(recs){
+  const t = {matched: 0, added: 0, cdb: 0, cdbChanged: 0, times: 0}, months = [], absent = [], bad = [];
+  recs.sort((a, b) => a.ym.localeCompare(b.ym)).forEach(rec => {
+    const r = applyCarnet(DB, rec, SET);
+    Object.keys(t).forEach(k => t[k] += r[k]); absent.push(...r.notInReleve);
+    const mo = MO[+rec.ym.slice(5)-1] + " " + rec.ym.slice(2,4); months.push(mo);
+    if (!rec.check.ok || rec.warn.length) bad.push(`${mo} (${rec.warn.slice(0, 2).join(" ; ") || "total à vérifier"})`);
+    if (rec.who && rec.who.tri && !SET.tri) { SET.tri = rec.who.tri; saveSettings(SET); }
+  });
+  return `Carnet${recs.length > 1 ? "s" : ""} de vol ${months.join(", ")} : ${t.matched} étape${t.matched > 1 ? "s" : ""} retrouvée${t.matched > 1 ? "s" : ""}${t.added ? `, ${t.added} ajoutée${t.added > 1 ? "s" : ""}` : ""}, ${t.cdb} CDB ajouté${t.cdb > 1 ? "s" : ""} ou corrigé${t.cdb > 1 ? "s" : ""}${t.cdbChanged ? ` (dont ${t.cdbChanged} différent${t.cdbChanged > 1 ? "s" : ""} du planning)` : ""}, minutes de nuit officielles reprises${t.times ? `, ${t.times} étape${t.times > 1 ? "s" : ""} passée${t.times > 1 ? "s" : ""} en heures réelles` : ""}.`
+    + (absent.length ? ` ${absent.length} étape${absent.length > 1 ? "s" : ""} du carnet absente${absent.length > 1 ? "s" : ""} du relevé d'activité, non ajoutée${absent.length > 1 ? "s" : ""} : ${absent.map(f => `${fdate(f.d)} ${f.v}`).join(", ")}.` : "")
+    + (bad.length ? ` À vérifier : ${bad.join(" · ")}.` : " Total vérifié ✓");
 }
 
 // Fichier à enregistrer : feuille de partage du téléphone (Fichiers, Drive, mail…), sinon téléchargement
@@ -246,7 +274,7 @@ function saveXlsx(){
 function bindSetup(){
   $("#relFile").addEventListener("change", e => { const fs = [...(e.target.files || [])]; if (fs.length) readReleves(fs); });
   document.querySelectorAll('[data-rel="apply"]').forEach(b => b.addEventListener("click", applyPlans));
-  document.querySelectorAll('[data-rel="cancel"]').forEach(b => b.addEventListener("click", () => { pending.plans = []; renderSetup(); }));
+  document.querySelectorAll('[data-rel="cancel"]').forEach(b => b.addEventListener("click", () => { pending.plans = []; pending.carnets = []; renderSetup(); }));
   $("#impPaste").addEventListener("click", async () => { let t = "";
     try { t = await navigator.clipboard.readText(); } catch (e) { msgTo("#impMsg")("Le téléphone a refusé l'accès au presse-papiers : colle le texte dans la zone ci-dessous (appui long → Coller).", false); return; }
     runCalendar(t); });
@@ -1225,7 +1253,7 @@ function workbookSheets(){
   sheets.push({name: "Vols", cols: [{h:"Date", t:"date", w:11}, {h:"Vol", w:10}, {h:"Départ", w:8}, {h:"Ville de départ", w:18}, {h:"Arrivée", w:8}, {h:"Ville d'arrivée", w:18}, {h:"Bloc départ", t:"time", w:11}, {h:"Bloc arrivée", t:"time", w:12}, {h:"Durée", t:"dur", w:8}, {h:"Nuit", t:"dur", w:7}, {h:"Durée (h décimales)", t:"dec", w:10}, {h:"Atterrissage de nuit", w:10}, {h:"Distance (NM)", t:"int", w:13}, {h:"Avion", w:7}, {h:"Immat.", w:9}, {h:"CDB", w:20}, {h:"Heures", w:12}, {h:"Source", w:34}],
     rows: FL.map(f => [f.d, f.v, f.o, cityOf(f.o), f.a, cityOf(f.a), f.h1, f.h2, f.m, f.n, Math.round(f.m / 60 * 100) / 100, yes(f.ln), f.nm, f.ty || "", f.im || "", f.c || "", f.pg ? "programmées" : "réelles", f.s || ""]),
     total: [`${FL.length} étapes`, "", "", "", "", "", "", "", sumBy(FL, f => f.m), sumBy(FL, f => f.n), Math.round(sumBy(FL, f => f.m) / 60 * 100) / 100, `${FL.filter(f => f.ln).length} de nuit`, sumBy(FL, f => f.nm)]});
-  if (!HAS_CDB) { const v = sheets[sheets.length - 1], i = v.cols.findIndex(c => c.h === "CDB"); v.cols.splice(i, 1); v.rows.forEach(r => r.splice(i, 1)); }   // pas de CDB sans le planning
+  if (!HAS_CDB) { const v = sheets[sheets.length - 1], i = v.cols.findIndex(c => c.h === "CDB"); v.cols.splice(i, 1); v.rows.forEach(r => r.splice(i, 1)); }   // pas de CDB sans carnet de vol ni planning
   // Mises en place
   if (D.meps.length) { const MP = [...D.meps].sort((a, b) => (a.d + a.h1).localeCompare(b.d + b.h1));
     sheets.push({name: "MEP", note: "Mises en place (avion ou train) : hors heures de vol, utilisées pour situer le début et la fin des rotations (impôts).",
@@ -1279,7 +1307,7 @@ function workbookSheets(){
 exportBook = () => makeXlsx(workbookSheets(), {title: "Carnet de vol", author: SET.name || "Carnet de vol"});
 
 $("#foot").innerHTML = `<div>Dernière mise à jour : ${DB.imported ? fdate(DB.imported.slice(0,10)) : "—"}${Object.keys(DB.releves).length ? ` · relevés d'activité : ${Object.keys(DB.releves).sort().map(k => MOIS[+k.slice(5)-1] + " " + k.slice(2,4)).join(", ")}` : ""}. Pour actualiser, importe chaque nouveau relevé depuis « Importer » (et ton planning si tu suis le mois en cours) : les nouvelles données s'ajoutent, l'historique est conservé.</div>
-<div>Heures bloc : relevés d'activité HOP! (heures réelles) quand ils sont importés, sinon planning. « prog. » signale une étape encore en heures programmées. Nuit au sens EASA : de la fin du crépuscule civil du soir au début de l'aube civile, calculée minute par minute le long de la route orthodromique. « ATT N » = arrivée de nuit.</div>
+<div>Heures bloc : relevés d'activité HOP! (heures réelles) quand ils sont importés, sinon planning. « prog. » signale une étape encore en heures programmées. Nuit au sens EASA : de la fin du crépuscule civil du soir au début de l'aube civile, calculée minute par minute le long de la route orthodromique, ou reprise du carnet de vol HOP! quand il est importé. « ATT N » = arrivée de nuit.</div>
 <div>Tout est calculé et enregistré sur ce téléphone : aucune donnée n'est envoyée. Le récap impôts est indicatif, à valider avec tes justificatifs.</div>
 <div class="disclaimer">Outil personnel, non affilié à HOP! ni à Air France. Aucune donnée collectée. Fourni tel quel, sans garantie.</div>`;
 let rt; addEventListener("resize", () => { clearTimeout(rt); rt = setTimeout(() => { renderChart(); renderMap(sel().F); }, 120); });
